@@ -39,6 +39,8 @@ export class GameScene extends Phaser.Scene {
   private paused = false;
   private gameOver = false;
   public lastCrash: { ids: string[]; positions: { x: number; y: number }[] } | null = null;
+  /** Only one train at a time may occupy each station throat. */
+  private throatOwner: { west: string | null; east: string | null } = { west: null, east: null };
   private gameOverText!: Phaser.GameObjects.Text;
   private restartHint!: Phaser.GameObjects.Text;
 
@@ -55,14 +57,22 @@ export class GameScene extends Phaser.Scene {
     this.score = 0; this.served = 0; this.crashes = 0; this.elapsed = 0;
     this.spawnTimer = 0; this.spawnEvery = 7; this.trainId = 0;
     this.selectedId = null; this.paused = false; this.gameOver = false;
+    this.throatOwner = { west: null, east: null };
 
     this.cameras.main.setBackgroundColor('#1e272e');
     this.gfx = this.add.graphics().setDepth(1);
 
     this.add.text(20, MAIN_Y - 66, 'WEST MAIN', { fontSize: '11px', color: '#7f8c8d' });
     this.add.text(W - 110, MAIN_Y - 66, 'EAST MAIN', { fontSize: '11px', color: '#7f8c8d' });
+    this.add.text(70, MAIN_IN_Y - 78, 'WEST BAY', { fontSize: '11px', color: '#81ecec' });
+    this.add.text(W - 200, MAIN_IN_Y - 78, 'EAST BAY', { fontSize: '11px', color: '#81ecec' });
     for (let i = 0; i < 4; i++) {
       this.add.text(PLATFORM_X0 + 6, PLATFORM_Y[i] - 60, `PLATFORM ${i + 1}`, { fontSize: '12px', color: '#ecf0f1', fontStyle: 'bold' });
+    }
+
+    // Signal labels next to each head
+    for (const sig of this.signals) {
+      this.add.text(sig.x, sig.y - 48, sig.label, { fontSize: '9px', color: '#bdc3c7' }).setOrigin(0.5);
     }
 
     this.gameOverText = this.add.text(W / 2, H / 2 - 40, '', {
@@ -128,6 +138,7 @@ export class GameScene extends Phaser.Scene {
       platform: null,
       dwellTimer: 0,
       freight,
+      blocked: false,
     };
     this.trains.push(t);
     this.buildView(t);
@@ -141,7 +152,7 @@ export class GameScene extends Phaser.Scene {
       let key = locoKey;
       if (car.kind === 'coach') key = 'coach';
       if (car.kind === 'wagon') key = i % 2 === 0 ? 'wagon-blue' : 'wagon-orange';
-      const sp = this.add.sprite(0, 0, key).setDepth(12 + i).setScale(0.85);
+      const sp = this.add.sprite(0, 0, key).setDepth(12 + i).setScale(1.15);
       sprites.push(sp);
       offsets.push(car.offset);
     });
@@ -236,6 +247,20 @@ export class GameScene extends Phaser.Scene {
       this.spawnEvery = Math.max(4, this.spawnEvery - 0.12);
     }
 
+    // Throat token: release finished trains, then grant to the first waiter.
+    for (const side of ['west', 'east'] as const) {
+      const owner = this.throatOwner[side];
+      if (owner) {
+        const t = this.trains.find(x => x.id === owner);
+        if (!t || t.state === 'docked' || t.state === 'waiting') this.throatOwner[side] = null;
+      }
+    }
+    for (const t of this.trains) {
+      if (t.state !== 'approaching' && t.state !== 'departing') continue;
+      const side = this.sideOf(t);
+      if (this.throatOwner[side] === null) this.throatOwner[side] = t.id;
+    }
+
     for (const t of this.trains) {
       const route = this.route(t.routeId);
       const L = route.length;
@@ -248,14 +273,9 @@ export class GameScene extends Phaser.Scene {
       }
 
       if (t.state === 'approaching' || t.state === 'departing') {
-        // One train at a time through each station throat.
-        const throatBusy = this.trains.some(o => {
-          if (o === t || this.sideOf(o) !== side) return false;
-          if (o.state === 'approaching') return o.progress > HOLD_PROGRESS + 60;
-          if (o.state === 'departing') return o.progress > 60 && o.progress < this.route(o.routeId).length - 80;
-          return false;
-        });
-        const clear = this.signalForRoute(t.routeId) && !throatBusy;
+        // Only the throat owner may move; others wait for a clear path.
+        const clear = this.signalForRoute(t.routeId) && this.throatOwner[side] === t.id;
+        t.blocked = !clear;
         if (clear) t.speed = Math.min(t.speed + 46 * seconds, t.maxSpeed);
         else t.speed = Math.max(t.speed - 150 * seconds, 0);
         t.progress += t.speed * seconds;
@@ -267,9 +287,6 @@ export class GameScene extends Phaser.Scene {
           t.state = 'docked';
           t.dwellTimer = 4 + Math.random() * 3;
           this.score += 50;
-          // Arm the departure signal red so the player must release it.
-          const out = this.signals.find(s => s.id === `sig-p${t.platform}-out`);
-          if (out) out.state = 'red';
         }
 
         if (t.state === 'departing' && t.progress >= L + 12) {
@@ -358,10 +375,14 @@ export class GameScene extends Phaser.Scene {
       view.label.setPosition(head.x, head.y - 34);
       const sel = t.id === this.selectedId;
       let txt = STATE_TEXT[t.state] + (t.platform !== null ? '  P' + (t.platform + 1) : '');
-      if (t.state === 'docked' && t.dwellTimer <= 0) txt = 'READY - open OUT signal';
+      if (t.blocked && (t.state === 'approaching' || t.state === 'departing')) txt = 'STOPPED - red light or path busy';
+      if (t.state === 'docked' && t.dwellTimer <= 0) {
+        const outSide = t.direction === 'west' ? 'E' : 'W';
+        txt = `READY - open OUT-${outSide} (${outSide === 'E' ? 'right' : 'left'} end)`;
+      }
       if (t.state === 'waiting') txt = 'WAITING - click me, then a platform';
       view.label.setText(`${t.id}  ${txt}`);
-      view.label.setColor(sel ? '#ffeaa7' : '#ffffff');
+      view.label.setColor(t.blocked ? '#ff7675' : sel ? '#ffeaa7' : '#ffffff');
       view.halo.clear();
       if (sel) {
         view.halo.lineStyle(2, 0xffeaa7, 0.9);
@@ -422,16 +443,28 @@ export class GameScene extends Phaser.Scene {
       g.lineStyle(2, 0x000, 0.6); g.strokeCircle(sig.x, sig.y - 32, 8);
     }
 
+    // Station building below the platforms
+    g.fillStyle(0x27323c, 1); g.fillRect(520, 600, 240, 56);
+    g.fillStyle(0x3d4d5c, 1); g.fillRect(500, 592, 280, 12);
+    g.fillStyle(0xf1c40f, 0.8);
+    for (let x = 540; x < 750; x += 28) g.fillRect(x, 614, 16, 12);
+    g.fillStyle(0x81ecec, 0.7); g.fillRect(628, 632, 24, 24);
+
+    // Junction markers
     for (const jx of [JUNC_W, JUNC_E]) {
       g.fillStyle(0xf1c40f, 0.8);
       g.fillTriangle(jx - 9, MAIN_Y + 9, jx + 9, MAIN_Y + 9, jx, MAIN_Y - 9);
     }
 
-    // Waiting bays marker
-    g.lineStyle(2, 0x3498db, 0.6);
-    g.strokeRect(60, MAIN_IN_Y - 16, 150, 32);
-    g.strokeRect(W - 210, MAIN_IN_Y - 16, 150, 32);
+    // Arrival (upper) and departure (lower) main line legend
+    g.fillStyle(0x95a5a6, 1);
+    g.fillRect(20, MAIN_IN_Y - 3, 18, 2);
+    g.fillRect(20, 352 - 3, 18, 2);
 
+    // Waiting bays
+    g.lineStyle(2, 0x3498db, 0.9);
+    g.strokeRect(40, MAIN_IN_Y - 20, 170, 40);
+    g.strokeRect(W - 210, MAIN_IN_Y - 20, 170, 40); 
     if (this.paused) { g.fillStyle(0x000, 0.5); g.fillRect(0, 0, W, H); }
   }
 

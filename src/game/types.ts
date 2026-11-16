@@ -44,6 +44,7 @@ export interface Train {
   platform: number | null;
   dwellTimer: number;
   freight: boolean;
+  blocked: boolean;
 }
 
 export interface Track {

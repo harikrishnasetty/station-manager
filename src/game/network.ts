@@ -69,16 +69,18 @@ export function buildNetwork(): { routes: Route[]; signals: Signal[]; tracks: Tr
     ]));
   }
 
+  // Only functional signals: the two main approach signals and one departure
+  // signal per platform. No decorative lights that do nothing.
   const signals: Signal[] = [
-    { id: 'sig-w', x: JUNC_W - 30, y: MAIN_Y, state: 'red', routes: routes.filter(r => r.id.startsWith('w2p')).map(r => r.id), label: 'W' },
-    { id: 'sig-e', x: JUNC_E + 30, y: MAIN_Y, state: 'red', routes: routes.filter(r => r.id.startsWith('e2p')).map(r => r.id), label: 'E' },
+    { id: 'sig-w', x: JUNC_W - 30, y: MAIN_IN_Y, state: 'red', routes: routes.filter(r => r.id.startsWith('w2p')).map(r => r.id), label: 'W' },
+    { id: 'sig-e', x: JUNC_E + 30, y: MAIN_IN_Y, state: 'red', routes: routes.filter(r => r.id.startsWith('e2p')).map(r => r.id), label: 'E' },
   ];
   for (let i = 0; i < 4; i++) {
     const y = PLATFORM_Y[i];
-    // Platform-entry lights are decorative only; the main signal (W/E) is the
-    // single authority to enter. The platform-exit light gates departure.
-    signals.push({ id: `sig-p${i}-in`, x: PLATFORM_X0 - 16, y, state: 'green', routes: [], label: `IN${i + 1}` });
-    signals.push({ id: `sig-p${i}-out`, x: PLATFORM_X1 + 16, y, state: 'red', routes: [`p${i}2e`, `p${i}2w`], label: `OUT${i + 1}` });
+    // One departure signal at EACH end: the left one releases west-bound trains,
+    // the right one releases east-bound trains.
+    signals.push({ id: `sig-p${i}-out-w`, x: PLATFORM_X0 - 16, y, state: 'red', routes: [`p${i}2w`], label: `OUT${i + 1}W` });
+    signals.push({ id: `sig-p${i}-out-e`, x: PLATFORM_X1 + 16, y, state: 'red', routes: [`p${i}2e`], label: `OUT${i + 1}E` });
   }
 
   return { routes, signals, tracks };
