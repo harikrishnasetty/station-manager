@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Station Manager</title>
+    <style>
+      body { margin: 0; background: #1a1a2e; color: #eee; font-family: 'Segoe UI', sans-serif; }
+      #app { width: 100vw; height: 100vh; }
+      #hud { position: absolute; top: 10px; left: 10px; background: rgba(0,0,0,0.7); padding: 10px; border-radius: 8px; font-size: 14px; }
+      #hud div { margin: 4px 0; }
+      #hint { position: absolute; bottom: 10px; left: 10px; background: rgba(0,0,0,0.7); padding: 8px; border-radius: 8px; font-size: 12px; max-width: 600px; }
+    </style>
+  </head>
+  <body>
+    <div id="app"></div>
+    <div id="hud">
+      <div><b>Station Manager</b></div>
+      <div>Score: <span id="score">0</span></div>
+      <div>Served: <span id="served">0</span></div>
+      <div>Crashes: <span id="crashes">0</span></div>
+      <div>Time: <span id="time">0</span>s</div>
+    </div>
+    <div id="hint">
+      Click a signal (coloured light) to toggle red/green. Click a switch (diamond) to toggle route.
+      Assign incoming trains to platforms by clicking the platform. Avoid collisions!
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
