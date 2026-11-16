@@ -186,9 +186,9 @@ export class GameScene extends Phaser.Scene {
       }
     }
 
-    // 2) Toggle a signal.
+    // Signals: generous hitbox over the post + head so they're easy to click.
     for (const sig of this.signals) {
-      if (Math.hypot(x - sig.x, y - sig.y - 32) < 18) {
+      if (Math.abs(x - sig.x) < 16 && y > sig.y - 44 && y < sig.y + 6) {
         sig.state = sig.state === 'red' ? 'green' : 'red';
         return;
       }
