@@ -12,6 +12,8 @@ export const JUNC_E = 1020;
 export const MAIN_Y = 340;
 export const MAIN_IN_Y = 328;
 export const MAIN_OUT_Y = 352;
+/** Where arriving trains wait, visibly, before a platform is assigned. */
+export const HOLD_PROGRESS = 170;
 
 function dist(a: Vec, b: Vec): number { return Math.hypot(b.x - a.x, b.y - a.y); }
 function len(pts: Vec[]): number {
@@ -73,7 +75,9 @@ export function buildNetwork(): { routes: Route[]; signals: Signal[]; tracks: Tr
   ];
   for (let i = 0; i < 4; i++) {
     const y = PLATFORM_Y[i];
-    signals.push({ id: `sig-p${i}-in`, x: PLATFORM_X0 - 16, y, state: 'red', routes: [`w2p${i}`, `e2p${i}`], label: `IN${i + 1}` });
+    // Platform-entry lights are decorative only; the main signal (W/E) is the
+    // single authority to enter. The platform-exit light gates departure.
+    signals.push({ id: `sig-p${i}-in`, x: PLATFORM_X0 - 16, y, state: 'green', routes: [], label: `IN${i + 1}` });
     signals.push({ id: `sig-p${i}-out`, x: PLATFORM_X1 + 16, y, state: 'red', routes: [`p${i}2e`, `p${i}2w`], label: `OUT${i + 1}` });
   }
 

@@ -18,7 +18,9 @@ export interface Signal {
   label: string;
 }
 
-export type TrainPhase = 'approach' | 'dwell' | 'depart' | 'waiting';
+/** waiting: at the holding signal. approaching: entering a platform.
+ *  docked: at the platform. departing: leaving the station. */
+export type TrainState = 'waiting' | 'approaching' | 'docked' | 'departing';
 
 export interface Car {
   kind: 'loco' | 'coach' | 'wagon';
@@ -29,10 +31,11 @@ export interface Car {
 export interface Train {
   id: string;
   name: string;
-  phase: TrainPhase;
+  state: TrainState;
   direction: 'west' | 'east';
   routeId: string;
   progress: number;
+  holdProgress: number;
   speed: number;
   maxSpeed: number;
   cars: Car[];
@@ -41,7 +44,6 @@ export interface Train {
   platform: number | null;
   dwellTimer: number;
   freight: boolean;
-  arrived: boolean;
 }
 
 export interface Track {
