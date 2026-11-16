@@ -1,297 +1,402 @@
 import Phaser from 'phaser';
-
-// ---- Track layout ----
-// A station with 4 parallel platform tracks + 1 arrival + 1 departure track.
-// Tracks run horizontally. Switches at x=200 (entry) and x=1080 (exit).
-
-interface TrackDef { id: string; y: number; x0: number; x1: number; kind: 'main' | 'platform' | 'arrival' | 'departure'; }
-interface SignalDef { id: string; track: string; x: number; }
-interface Train { id: string; track: string; x: number; speed: number; state: 'approach' | 'platform' | 'depart'; platform: string | null; dwell: number; color: number; dir: 1 | -1; }
-
-const TRACKS: TrackDef[] = [
-  { id: 'arrival', y: 180, x0: 0, x1: 200, kind: 'arrival' },
-  { id: 'p1', y: 260, x0: 200, x1: 1080, kind: 'platform' },
-  { id: 'p2', y: 340, x0: 200, x1: 1080, kind: 'platform' },
-  { id: 'p3', y: 420, x0: 200, x1: 1080, kind: 'platform' },
-  { id: 'p4', y: 500, x0: 200, x1: 1080, kind: 'platform' },
-  { id: 'departure', y: 580, x0: 1080, x1: 1280, kind: 'departure' },
-];
-
-const SIGNALS: SignalDef[] = [
-  { id: 'sig-arr', track: 'arrival', x: 180 },
-  { id: 'sig-p1-in', track: 'p1', x: 220 },
-  { id: 'sig-p2-in', track: 'p2', x: 220 },
-  { id: 'sig-p3-in', track: 'p3', x: 220 },
-  { id: 'sig-p4-in', track: 'p4', x: 220 },
-  { id: 'sig-p1-out', track: 'p1', x: 1060 },
-  { id: 'sig-p2-out', track: 'p2', x: 1060 },
-  { id: 'sig-p3-out', track: 'p3', x: 1060 },
-  { id: 'sig-p4-out', track: 'p4', x: 1060 },
-  { id: 'sig-dep', track: 'departure', x: 1100 },
-];
-
-const SWITCHES: { id: string; x: number; y: number; }[] = [
-  { id: 'sw-arr', x: 195, y: 180 },
-  { id: 'sw-dep', x: 1085, y: 580 },
-];
+import type { Car, Route, Train } from './types';
+import { buildNetwork, pointAt, angleAt, W, H, PLATFORM_Y, PLATFORM_X0, PLATFORM_X1, MAIN_Y, JUNC_W, JUNC_E } from './network';
 
 export class GameScene extends Phaser.Scene {
-  private tracks = TRACKS;
-  private signals: { id: string; track: string; x: number; state: 'red' | 'green' }[] = [];
-  private switches: { id: string; x: number; y: number; state: 'straight' | 'diverge' }[] = [];
+  private routes!: Route[];
+  private signals!: ReturnType<typeof buildNetwork>['signals'];
+  private tracks!: ReturnType<typeof buildNetwork>['tracks'];
   private trains: Train[] = [];
+  private views = new Map<string, { sprites: Phaser.GameObjects.Sprite[]; offsets: number[] }>();
   private score = 0;
   private served = 0;
   private crashes = 0;
   private elapsed = 0;
   private spawnTimer = 0;
-  private spawnInterval = 8;
+  private spawnEvery = 5;
   private gfx!: Phaser.GameObjects.Graphics;
-  private trainGfx!: Phaser.GameObjects.Graphics;
-  private uiTimer = 0;
+  private trainId = 0;
+  public lastCrash: { ids: string[]; positions: { x: number; y: number }[] } | null = null;
+  private hoverPlatform: number | null = null;
+  private selectedForAssign: string | null = null;
+  private paused = false;
   private gameOver = false;
 
   constructor() { super('game'); }
 
   create(): void {
-    this.signals = SIGNALS.map(s => ({ ...s, state: 'red' as const }));
-    this.switches = SWITCHES.map(s => ({ ...s, state: 'straight' as const }));
-    this.gfx = this.add.graphics();
-    this.trainGfx = this.add.graphics();
+    const net = buildNetwork();
+    this.routes = net.routes;
+    this.signals = net.signals;
+    this.tracks = net.tracks;
 
+    // Background
+    this.cameras.main.setBackgroundColor('#1e272e');
+    this.add.image(W / 2, H / 2, '__DEFAULT').setVisible(false);
+
+    this.gfx = this.add.graphics().setDepth(1);
+
+    // Static labels
+    this.add.text(20, MAIN_Y - 40, 'WEST MAIN', { fontSize: '11px', color: '#7f8c8d' });
+    this.add.text(W - 110, MAIN_Y - 40, 'EAST MAIN', { fontSize: '11px', color: '#7f8c8d' });
     for (let i = 0; i < 4; i++) {
-      const tr = this.tracks[1 + i];
-      this.add.text(tr.x0 + 10, tr.y - 40, `Platform ${i + 1}`, { fontSize: '13px', color: '#ecf0f1', fontStyle: 'bold' }).setOrigin(0, 0.5);
+      this.add.text(PLATFORM_X0 + 6, PLATFORM_Y[i] - 46, `PLATFORM ${i + 1}`, { fontSize: '12px', color: '#ecf0f1', fontStyle: 'bold' });
     }
-    this.add.text(20, 150, 'ARRIVAL', { fontSize: '12px', color: '#95a5a6' }).setOrigin(0, 0.5);
-    this.add.text(1100, 550, 'DEPARTURE', { fontSize: '12px', color: '#95a5a6' }).setOrigin(0, 0.5);
 
     this.input.on('pointerdown', (p: Phaser.Input.Pointer) => this.handleClick(p.x, p.y));
+    this.input.on('pointermove', (p: Phaser.Input.Pointer) => this.handleHover(p.x, p.y));
 
+    this.keysSetup();
     this.spawnTrain();
+    this.spawnTimer = -2;
   }
 
-  private trackY(id: string): number {
-    return this.tracks.find(t => t.id === id)!.y;
+  private keysSetup(): void {
+    this.input.keyboard?.on('keydown-SPACE', () => { this.paused = !this.paused; });
   }
+
+  private route(id: string): Route { return this.routes.find(r => r.id === id)!; }
 
   private spawnTrain(): void {
-    const colors = [0xe74c3c, 0x3498db, 0x2ecc71, 0xf39c12, 0x9b59b6, 0x1abc9c];
+    // Don't stack a new service on top of one already waiting at the same entry.
+    const dir: 'west' | 'east' = Math.random() < 0.5 ? 'west' : 'east';
+    const busy = this.trains.some(t => {
+      const p = pointAt(this.route(t.routeId).points, t.progress);
+      const spawnX = dir === 'west' ? -40 : W + 40;
+      return Math.hypot(p.x - spawnX, p.y - MAIN_Y) < 80;
+    });
+    if (busy) return;
+    const freight = Math.random() < 0.35;
+    const colors = [0xc0392b, 0x2980b9, 0x27ae60, 0x8e44ad, 0xe67e22];
+    const color = colors[Math.floor(Math.random() * colors.length)];
+
+    const cars: Car[] = [];
+    if (freight) {
+      cars.push({ kind: 'loco', offset: 0, length: 60 });
+      cars.push({ kind: 'wagon', offset: 68, length: 52 });
+      cars.push({ kind: 'wagon', offset: 124, length: 52 });
+      cars.push({ kind: 'wagon', offset: 180, length: 52 });
+    } else {
+      cars.push({ kind: 'loco', offset: 0, length: 58 });
+      cars.push({ kind: 'coach', offset: 66, length: 54 });
+      cars.push({ kind: 'coach', offset: 124, length: 54 });
+    }
+    const length = cars[cars.length - 1].offset + cars[cars.length - 1].length;
+
     const t: Train = {
-      id: `train-${this.trains.length}`,
-      track: 'arrival',
-      x: -50,
-      speed: 80,
-      state: 'approach',
+      id: `t${this.trainId++}`,
+      name: `${freight ? 'Freight' : 'Passenger'} ${dir === 'west' ? 'W' : 'E'}${this.trainId}`,
+      phase: 'approach',
+      direction: dir,
+      routeId: dir === 'west' ? 'w2p0' : 'e2p0',
+      progress: 0,
+      speed: 36,
+      maxSpeed: freight ? 60 : 86,
+      cars,
+      length,
+      color,
       platform: null,
-      dwell: 4 + Math.random() * 2,
-      color: colors[Math.floor(Math.random() * colors.length)],
-      dir: 1,
+      dwellTimer: 0,
+      freight,
+      arrived: false,
     };
     this.trains.push(t);
+    this.buildView(t);
+  }
+
+  private buildView(t: Train): void {
+    const sprites: Phaser.GameObjects.Sprite[] = [];
+    const offsets: number[] = [];
+    const locoKey = t.color === 0xc0392b ? 'loco-red' : t.color === 0x2980b9 ? 'loco-blue' : 'loco-green';
+    t.cars.forEach((car, i) => {
+      let key = locoKey;
+      if (car.kind === 'coach') key = 'coach';
+      if (car.kind === 'wagon') key = i % 2 === 0 ? 'wagon-blue' : 'wagon-orange';
+      const sp = this.add.sprite(0, 0, key).setDepth(10 + i).setScale(0.85);
+      sprites.push(sp);
+      offsets.push(car.offset);
+    });
+    this.views.set(t.id, { sprites, offsets });
+  }
+
+  private handleHover(x: number, y: number): void {
+    this.hoverPlatform = null;
+    for (let i = 0; i < 4; i++) {
+      if (y > PLATFORM_Y[i] - 30 && y < PLATFORM_Y[i] + 16 && x > PLATFORM_X0 && x < PLATFORM_X1) {
+        this.hoverPlatform = i;
+      }
+    }
   }
 
   private handleClick(x: number, y: number): void {
-    if (this.gameOver) return;
+    if (this.gameOver || this.paused) return;
     // Signal click
     for (const sig of this.signals) {
-      const ty = this.trackY(sig.track);
-      if (Math.abs(x - sig.x) < 14 && Math.abs(y - ty) < 14) {
+      if (Math.hypot(x - sig.x, y - sig.y) < 20) {
         sig.state = sig.state === 'red' ? 'green' : 'red';
         return;
       }
     }
-    // Switch click
-    for (const sw of this.switches) {
-      if (Math.abs(x - sw.x) < 14 && Math.abs(y - sw.y) < 14) {
-        sw.state = sw.state === 'straight' ? 'diverge' : 'straight';
-        return;
-      }
-    }
-    // Platform assignment: click on a platform track
-    for (const tr of this.tracks) {
-      if (tr.kind === 'platform' && y > tr.y - 22 && y < tr.y + 22 && x > tr.x0 + 20 && x < tr.x1 - 20) {
-        const approaching = this.trains.find(t => t.state === 'approach');
-        if (approaching) approaching.platform = tr.id;
+    // Platform click -> assign selected or nearest approaching train
+    for (let i = 0; i < 4; i++) {
+      if (y > PLATFORM_Y[i] - 34 && y < PLATFORM_Y[i] + 20 && x > PLATFORM_X0 - 10 && x < PLATFORM_X1 + 10) {
+        const occupied = this.trains.some(t => t.platform === i && t.phase === 'dwell');
+        if (occupied) return;
+        let train: Train | undefined;
+        if (this.selectedForAssign) train = this.trains.find(t => t.id === this.selectedForAssign && t.phase === 'approach');
+        if (!train) train = this.trains.filter(t => t.phase === 'approach' && !t.platform).sort((a, b) => b.progress - a.progress)[0];
+        if (train) {
+          train.platform = i;
+          train.routeId = `${train.direction === 'west' ? 'w' : 'e'}2p${i}`;
+          train.arrived = false;
+          this.selectedForAssign = null;
+        }
         return;
       }
     }
   }
 
-  private signalState(track: string, x: number): 'red' | 'green' {
-    const sigs = this.signals.filter(s => s.track === track);
-    let best: { id: string; track: string; x: number; state: 'red' | 'green' } | null = null;
-    for (const s of sigs) {
-      if (s.x > x && (!best || s.x < best.x)) best = s;
-    }
-    if (!best) return 'green';
-    return best.state;
+  private signalForRoute(routeId: string): boolean {
+    const sigs = this.signals.filter(s => s.routes.includes(routeId));
+    return sigs.every(s => s.state === 'green');
   }
 
   update(_time: number, dt: number): void {
     if (this.gameOver) return;
     const seconds = Math.min(dt, 100) / 1000;
+    if (this.paused) { this.draw(); return; }
+
     this.elapsed += seconds;
     this.spawnTimer += seconds;
-    if (this.spawnTimer > this.spawnInterval) {
+    if (this.spawnTimer > this.spawnEvery) {
       this.spawnTimer = 0;
       this.spawnTrain();
-      this.spawnInterval = Math.max(3, this.spawnInterval - 0.1);
+      this.spawnEvery = Math.max(3, this.spawnEvery - 0.15);
     }
 
     for (const t of this.trains) {
-      if (t.state === 'approach') {
-        const sig = this.signalState(t.track, t.x);
-        if (sig === 'green') t.speed = Math.min(t.speed + 60 * seconds, 140);
-        else t.speed = Math.max(t.speed - 100 * seconds, 0);
-        t.x += t.speed * seconds * t.dir;
+      const route = this.route(t.routeId);
+      const L = route.length;
+      const side: 'west' | 'east' = t.routeId.startsWith('w2p') || t.routeId.endsWith('2w') ? 'west' : 'east';
+      const isApproach = t.routeId.startsWith('w2p') || t.routeId.startsWith('e2p');
 
-        // Transition to platform if assigned and at junction
-        if (t.platform && t.x > 195) {
-          t.track = t.platform;
-          t.x = 230;
-          t.state = 'platform';
+      if (t.phase === 'approach' || t.phase === 'depart') {
+        // Must have a platform assigned before entering (approach only).
+        const ready = t.phase === 'depart' || t.platform !== null;
+        if (!ready) {
+          t.speed = 0;
+          t.progress = Math.min(t.progress, 0);
+          this.syncViews(); this.draw(); this.updateHud();
+          continue;
+        }
+
+        // One train at a time per side on the shared throat. Others wait clear.
+        const sideBusy = this.trains.some(o => {
+          if (o === t) return false;
+          const oSide: 'west' | 'east' = o.routeId.startsWith('w2p') || o.routeId.endsWith('2w') ? 'west' : 'east';
+          if (oSide !== side) return false;
+          const oApp = o.routeId.startsWith('w2p') || o.routeId.startsWith('e2p');
+          const oL = this.route(o.routeId).length;
+          // Occupying the throat: approaching past the off-map point, or departing before the exit.
+          return (oApp && o.progress > 20 && o.progress < oL - 40) ||
+                 (!oApp && o.progress > 40 && o.progress < oL - 20);
+        });
+        const clear = this.signalForRoute(t.routeId) && !sideBusy;
+
+        if (clear) t.speed = Math.min(t.speed + 45 * seconds, t.maxSpeed);
+        else t.speed = Math.max(t.speed - 140 * seconds, 0);
+
+        t.progress += t.speed * seconds;
+        if (!clear) {
+          const hold = isApproach ? Math.min(t.progress, 0) : Math.min(t.progress, 30);
+          t.progress = hold;
           t.speed = 0;
         }
-        // Missed train (passed through without platform)
-        if (t.x > 210 && !t.platform) {
-          // still approaching, nudge to assign
-        }
-        if (t.x > 1280) {
-          this.trains = this.trains.filter(x => x.id !== t.id);
-          this.score = Math.max(0, this.score - 50);
-        }
-      } else if (t.state === 'platform') {
-        t.dwell -= seconds;
-        if (t.dwell <= 0) {
-          t.state = 'depart';
-          t.track = 'departure';
-          t.x = 1090;
+
+        // Arrival at platform centre
+        const stopAt = L - 6;
+        if (t.phase === 'approach' && t.platform !== null && t.progress >= stopAt) {
+          t.progress = stopAt;
           t.speed = 0;
+          t.phase = 'dwell';
+          t.dwellTimer = 4 + Math.random() * 3;
+          this.score += 50;
         }
-      } else if (t.state === 'depart') {
-        const sig = this.signalState(t.track, t.x);
-        if (sig === 'green') t.speed = Math.min(t.speed + 60 * seconds, 140);
-        else t.speed = Math.max(t.speed - 100 * seconds, 0);
-        t.x += t.speed * seconds * t.dir;
-        if (t.x > 1280) {
+        // Departed off screen
+        if (t.progress >= L + 10) {
+          if (t.phase === 'depart') { this.served++; this.score += 100; }
           this.trains = this.trains.filter(x => x.id !== t.id);
-          this.served++;
-          this.score += 100;
+          this.views.delete(t.id);
+          continue;
+        }
+      } else if (t.phase === 'dwell') {
+        t.dwellTimer -= seconds;
+        if (t.dwellTimer <= 0) {
+          t.phase = 'depart';
+          t.routeId = `${t.direction === 'west' ? 'p' + t.platform + '2e' : 'p' + t.platform + '2w'}`;
+          // ensure departure signal is red initially
+          const sig = this.signals.find(s => s.id === `sig-p${t.platform}-out`);
+          if (sig) sig.state = 'red';
+          t.progress = 0;
+          t.speed = 0;
         }
       }
     }
 
-    // Collision detection
-    for (let i = 0; i < this.trains.length; i++) {
-      for (let j = i + 1; j < this.trains.length; j++) {
-        const a = this.trains[i], b = this.trains[j];
-        if (a.track === b.track && Math.abs(a.x - b.x) < 35) {
-          this.crashes++;
-          this.trains = this.trains.filter(t => t.id !== a.id && t.id !== b.id);
-          if (this.crashes >= 5) this.gameOver = true;
+    // Collision detection using actual sprite positions across all trains
+    const pts: { id: string; x: number; y: number }[] = [];
+    for (const t of this.trains) {
+      const v = this.views.get(t.id);
+      if (!v) continue;
+      const p = pointAt(this.route(t.routeId).points, t.progress);
+      pts.push({ id: t.id, x: p.x, y: p.y });
+    }
+    let crashed: [string, string] | null = null;
+    for (let i = 0; i < pts.length && !crashed; i++) {
+      for (let j = i + 1; j < pts.length; j++) {
+        if (Math.hypot(pts[i].x - pts[j].x, pts[i].y - pts[j].y) < 18) {
+          crashed = [pts[i].id, pts[j].id];
+          break;
         }
       }
     }
+    if (crashed) {
+      this.crashes++;
+      this.lastCrash = { ids: crashed, positions: crashed.map(id => {
+        const t = this.trains.find(x => x.id === id);
+        return t ? pointAt(this.route(t.routeId).points, t.progress) : { x: 0, y: 0 };
+      }), details: crashed.map(id => {
+        const t = this.trains.find(x => x.id === id);
+        return t ? { id: t.id, phase: t.phase, route: t.routeId, prog: Math.round(t.progress) } : null;
+      }) } as never;
+      this.trains = this.trains.filter(t => t.id !== crashed![0] && t.id !== crashed![1]);
+      this.views.delete(crashed[0]); this.views.delete(crashed[1]);
+      if (this.crashes >= 5) this.gameOver = true;
+    }
 
+    this.syncViews();
     this.draw();
     this.updateHud();
   }
 
+  private syncViews(): void {
+    for (const t of this.trains) {
+      const view = this.views.get(t.id);
+      if (!view) continue;
+      const pts = this.route(t.routeId).points;
+      view.sprites.forEach((sp, i) => {
+        const d = t.progress - view.offsets[i];
+        const p = pointAt(pts, d);
+        sp.setPosition(p.x, p.y);
+        sp.setRotation(angleAt(pts, d));
+      });
+    }
+  }
+
   private draw(): void {
-    this.gfx.clear();
-    this.trainGfx.clear();
+    const g = this.gfx;
+    g.clear();
 
-    // Background
-    this.gfx.fillStyle(0x2c3e50, 1);
-    this.gfx.fillRect(0, 0, 1280, 720);
+    // Ground
+    g.fillStyle(0x1e272e, 1); g.fillRect(0, 0, W, H);
+    // Subtle grid
+    g.lineStyle(1, 0x2f3b45, 0.5);
+    for (let x = 0; x < W; x += 60) g.lineBetween(x, 0, x, H);
+    for (let y = 0; y < H; y += 60) g.lineBetween(0, y, W, y);
 
-    // Track bed (ballast)
+    // Tracks (ballast, sleepers, rails)
     for (const tr of this.tracks) {
-      this.gfx.fillStyle(0x555, 1);
-      this.gfx.fillRect(tr.x0, tr.y - 6, tr.x1 - tr.x0, 12);
-    }
-    // Rails
-    this.gfx.lineStyle(2, 0x95a5a6, 1);
-    for (const tr of this.tracks) {
-      this.gfx.lineBetween(tr.x0, tr.y - 2, tr.x1, tr.y - 2);
-      this.gfx.lineBetween(tr.x0, tr.y + 2, tr.x1, tr.y + 2);
-    }
-    // Sleepers
-    this.gfx.lineStyle(1, 0x34495e, 1);
-    for (const tr of this.tracks) {
-      for (let x = tr.x0; x < tr.x1; x += 12) {
-        this.gfx.lineBetween(x, tr.y - 5, x, tr.y + 5);
+      const pts = tr.points;
+      const trackLen = tr.kind === 'main' ? 1280 : 560;
+      for (let d = 0; d < trackLen; d += 10) {
+        const p = pointAt(pts, d);
+        const a = angleAt(pts, d);
+        const nx = -Math.sin(a), ny = Math.cos(a);
+        // Ballast
+        g.fillStyle(0x3d4750, 1);
+        g.fillRect(p.x - 7, p.y - 7, 14, 14);
+        // Sleepers
+        g.lineStyle(2, 0x5a4a3a, 1);
+        g.lineBetween(p.x + nx * 6, p.y + ny * 6, p.x - nx * 6, p.y - ny * 6);
+      }
+      // Rails
+      g.lineStyle(2, 0x95a5a6, 1);
+      for (const off of [-3, 3]) {
+        const a0 = angleAt(pts, 0);
+        const p0 = pointAt(pts, 0);
+        const a1 = angleAt(pts, tr.kind === 'main' ? 1280 : 560);
+        const p1 = pointAt(pts, tr.kind === 'main' ? 1280 : 560);
+        g.lineBetween(p0.x - Math.sin(a0) * off, p0.y + Math.cos(a0) * off, p1.x - Math.sin(a1) * off, p1.y + Math.cos(a1) * off);
       }
     }
-    // Platforms
-    for (const tr of this.tracks) {
-      if (tr.kind === 'platform') {
-        this.gfx.fillStyle(0xbdc3c7, 0.8);
-        this.gfx.fillRect(tr.x0, tr.y - 22, tr.x1 - tr.x0, 18);
-        this.gfx.fillStyle(0xf1c40f, 0.9);
-        this.gfx.fillRect(tr.x0, tr.y - 22, tr.x1 - tr.x0, 3);
+
+    // Platform surface + canopy
+    for (let i = 0; i < 4; i++) {
+      const y = PLATFORM_Y[i];
+      const hovered = this.hoverPlatform === i;
+      g.fillStyle(hovered ? 0x95a5a6 : 0x7f8c8d, 1);
+      g.fillRect(PLATFORM_X0, y - 26, PLATFORM_X1 - PLATFORM_X0, 20);
+      // Tactile edge
+      g.fillStyle(0xf1c40f, 0.9);
+      g.fillRect(PLATFORM_X0, y - 8, PLATFORM_X1 - PLATFORM_X0, 3);
+      // Canopy pillars
+      g.fillStyle(0x34495e, 1);
+      for (let x = PLATFORM_X0 + 40; x < PLATFORM_X1; x += 120) g.fillRect(x, y - 50, 4, 24);
+      // Canopy roof
+      g.fillStyle(0x2c3e50, 1);
+      g.fillRect(PLATFORM_X0 + 20, y - 54, PLATFORM_X1 - PLATFORM_X0 - 40, 6);
+    }
+
+    // Curved connectors (route segments that aren't the main line or platforms)
+    g.lineStyle(3, 0x4a5560, 1);
+    for (const r of this.routes) {
+      const pts = r.points;
+      for (let k = 1; k < pts.length; k++) {
+        g.lineBetween(pts[k - 1].x, pts[k - 1].y, pts[k].x, pts[k].y);
       }
     }
 
     // Signals
     for (const sig of this.signals) {
-      const ty = this.trackY(sig.track);
-      // Signal post
-      this.gfx.lineStyle(2, 0x7f8c8d, 1);
-      this.gfx.lineBetween(sig.x, ty, sig.x, ty - 18);
-      // Signal head
-      this.gfx.fillStyle(sig.state === 'green' ? 0x2ecc71 : 0xe74c3c, 1);
-      this.gfx.fillCircle(sig.x, ty - 22, 7);
-      this.gfx.fillStyle(0x000, 0.3);
-      this.gfx.fillCircle(sig.x, ty - 22, 7);
-      this.gfx.lineStyle(1, 0x000, 1);
-      this.gfx.strokeCircle(sig.x, ty - 22, 7);
+      g.lineStyle(3, 0x7f8c8d, 1);
+      g.lineBetween(sig.x, sig.y, sig.x, sig.y - 26);
+      g.fillStyle(sig.state === 'green' ? 0x2ecc71 : 0xe74c3c, 1);
+      g.fillCircle(sig.x, sig.y - 32, 8);
+      g.lineStyle(2, 0x000, 0.6);
+      g.strokeCircle(sig.x, sig.y - 32, 8);
+      // Glow
+      g.fillStyle(sig.state === 'green' ? 0x2ecc71 : 0xe74c3c, 0.25);
+      g.fillCircle(sig.x, sig.y - 32, 14);
     }
-    // Switches
-    for (const sw of this.switches) {
-      this.gfx.fillStyle(0xf1c40f, 1);
-      this.gfx.fillTriangle(sw.x - 10, sw.y + 10, sw.x + 10, sw.y + 10, sw.x, sw.y - 10);
-      this.gfx.fillStyle(sw.state === 'diverge' ? 0xe67e22 : 0x2c3e50, 1);
-      this.gfx.fillCircle(sw.x, sw.y, 4);
+
+    // Junction markers
+    for (const jx of [JUNC_W, JUNC_E]) {
+      g.fillStyle(0xf1c40f, 0.8);
+      g.fillTriangle(jx - 9, MAIN_Y + 9, jx + 9, MAIN_Y + 9, jx, MAIN_Y - 9);
     }
-    // Trains
+
+    // Train label boxes
     for (const t of this.trains) {
-      const ty = this.trackY(t.track);
-      // Shadow
-      this.trainGfx.fillStyle(0x000, 0.3);
-      this.trainGfx.fillRect(t.x - 16, ty - 7, 32, 16);
-      // Body
-      this.trainGfx.fillStyle(t.color, 1);
-      this.trainGfx.fillRect(t.x - 15, ty - 8, 30, 16);
-      // Cab
-      this.trainGfx.fillStyle(0xffffff, 0.7);
-      this.trainGfx.fillRect(t.x + 5, ty - 6, 8, 12);
-      // Wheels
-      this.trainGfx.fillStyle(0x2c3e50, 1);
-      this.trainGfx.fillRect(t.x - 12, ty - 10, 4, 3);
-      this.trainGfx.fillRect(t.x - 12, ty + 7, 4, 3);
-      this.trainGfx.fillRect(t.x + 8, ty - 10, 4, 3);
-      this.trainGfx.fillRect(t.x + 8, ty + 7, 4, 3);
+      const pts = this.route(t.routeId).points;
+      const p = pointAt(pts, t.progress);
+      g.fillStyle(0x000000, 0.6);
+      g.fillRect(p.x - 26, p.y - 48, 52, 14);
     }
-    // Game over overlay
+
     if (this.gameOver) {
-      this.gfx.fillStyle(0x000, 0.7);
-      this.gfx.fillRect(0, 0, 1280, 720);
+      g.fillStyle(0x000, 0.75); g.fillRect(0, 0, W, H);
+    }
+    if (this.paused) {
+      g.fillStyle(0x000, 0.5); g.fillRect(0, 0, W, H);
     }
   }
 
   private updateHud(): void {
-    this.uiTimer += 0.016;
-    if (this.uiTimer < 0.1) return;
-    this.uiTimer = 0;
-    const scoreEl = document.getElementById('score');
-    const servedEl = document.getElementById('served');
-    const crashesEl = document.getElementById('crashes');
-    const timeEl = document.getElementById('time');
-    if (scoreEl) scoreEl.innerText = `${this.score}`;
-    if (servedEl) servedEl.innerText = `${this.served}`;
-    if (crashesEl) crashesEl.innerText = `${this.crashes}`;
-    if (timeEl) timeEl.innerText = `${Math.floor(this.elapsed)}`;
+    const set = (id: string, v: string) => { const el = document.getElementById(id); if (el) el.innerText = v; };
+    set('score', `${this.score}`);
+    set('served', `${this.served}`);
+    set('crashes', `${this.crashes}`);
+    set('time', `${Math.floor(this.elapsed)}`);
+    set('trains', `${this.trains.length}`);
   }
 }
