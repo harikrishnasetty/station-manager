@@ -42,6 +42,8 @@ export class GameScene extends Phaser.Scene {
   /** Only one train at a time may occupy each station throat. */
   private throatOwner: { west: string | null; east: string | null } = { west: null, east: null };
   private gameOverText!: Phaser.GameObjects.Text;
+  private groundPatches: { x: number; y: number; r: number; c: number }[] = [];
+  private trees: { x: number; y: number }[] = [];
   private restartHint!: Phaser.GameObjects.Text;
 
   constructor() { super('game'); }
@@ -59,6 +61,21 @@ export class GameScene extends Phaser.Scene {
     this.selectedId = null; this.paused = false; this.gameOver = false;
     this.throatOwner = { west: null, east: null };
 
+    // Deterministic scenery so the ground looks the same every frame.
+    let seed = 12345;
+    const rnd = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; };
+    for (let i = 0; i < 220; i++) {
+      const c = [0x25332b, 0x2b3a30, 0x30402f, 0x213027][Math.floor(rnd() * 4)];
+      this.groundPatches.push({ x: rnd() * W, y: rnd() * H, r: 12 + rnd() * 46, c });
+    }
+    for (let i = 0; i < 22; i++) {
+      const x = rnd() * W, y = rnd() * H;
+      // Keep trees off the tracks and platforms.
+      if (y > 100 && y < 570 && x > 150 && x < 1130) continue;
+      if (y > 300 && y < 380) continue;
+      this.trees.push({ x, y });
+    }
+
     this.cameras.main.setBackgroundColor('#1e272e');
     this.gfx = this.add.graphics().setDepth(1);
 
@@ -74,6 +91,9 @@ export class GameScene extends Phaser.Scene {
     for (const sig of this.signals) {
       this.add.text(sig.x, sig.y - 48, sig.label, { fontSize: '9px', color: '#bdc3c7' }).setOrigin(0.5);
     }
+
+    this.add.text(640, 578, 'CENTRAL STATION', { fontSize: '15px', color: '#f1c40f', fontStyle: 'bold', letterSpacing: 2 }).setOrigin(0.5);
+    this.add.text(640, 664, 'CONCOURSE  •  4 PLATFORMS', { fontSize: '10px', color: '#7f8c8d' }).setOrigin(0.5);
 
     this.gameOverText = this.add.text(W / 2, H / 2 - 40, '', {
       fontSize: '30px', color: '#ff6b6b', fontStyle: 'bold', align: 'center',
@@ -421,6 +441,11 @@ export class GameScene extends Phaser.Scene {
       view.label.setText(`${t.id}  ${txt}`);
       view.label.setColor(t.blocked ? '#ff7675' : sel ? '#ffeaa7' : '#ffffff');
       view.halo.clear();
+      // Headlight beam ahead of the leading car.
+      const ang = angleAt(pts, t.progress);
+      const hx = head.x + Math.cos(ang) * 26, hy = head.y + Math.sin(ang) * 26;
+      view.halo.fillStyle(0xfff3b0, 0.16); view.halo.fillCircle(hx, hy, 22);
+      view.halo.fillStyle(0xfff9d6, 0.28); view.halo.fillCircle(hx, hy, 10);
       if (sel) {
         view.halo.lineStyle(2, 0xffeaa7, 0.9);
         view.halo.strokeCircle(head.x, head.y, 34);
@@ -428,52 +453,122 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
+  /** Sample a centre line and stroke it with a lateral offset (for rails). */
+  private strokeLine(
+    g: Phaser.GameObjects.Graphics, pts: { x: number; y: number }[],
+    width: number, color: number, alpha: number, offset = 0,
+  ): void {
+    let total = 0;
+    for (let i = 1; i < pts.length; i++) total += Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
+    const samples: Phaser.Math.Vector2[] = [];
+    for (let d = 0; d <= total; d += 6) {
+      const p = pointAt(pts, d);
+      const a = angleAt(pts, Math.min(total - 0.01, Math.max(0.01, d)));
+      samples.push(new Phaser.Math.Vector2(p.x - Math.sin(a) * offset, p.y + Math.cos(a) * offset));
+    }
+    const end = pts[pts.length - 1];
+    const ea = angleAt(pts, total - 0.01);
+    samples.push(new Phaser.Math.Vector2(end.x - Math.sin(ea) * offset, end.y + Math.cos(ea) * offset));
+    g.lineStyle(width, color, alpha);
+    g.strokePoints(samples, false, false);
+  }
+
   private draw(): void {
     const g = this.gfx;
     g.clear();
-    g.fillStyle(0x1e272e, 1); g.fillRect(0, 0, W, H);
-    g.lineStyle(1, 0x2f3b45, 0.5);
-    for (let x = 0; x < W; x += 60) g.lineBetween(x, 0, x, H);
-    for (let y = 0; y < H; y += 60) g.lineBetween(0, y, W, y);
+    // Ground: dark grass with soft, deterministic patches.
+    g.fillStyle(0x1b2a22, 1); g.fillRect(0, 0, W, H);
+    for (const p of this.groundPatches) {
+      g.fillStyle(p.c, 0.35); g.fillCircle(p.x, p.y, p.r);
+    }
+    g.lineStyle(1, 0x32443a, 0.25);
+    for (let x = 0; x < W; x += 80) g.lineBetween(x, 0, x, H);
+    for (let y = 0; y < H; y += 80) g.lineBetween(0, y, W, y);
 
+    // Tracks: ballast bed, sleepers, twin rails with specular highlights.
     for (const tr of this.tracks) {
       const pts = tr.points;
-      const trackLen = tr.kind === 'main' ? 1280 : 560;
-      for (let d = 0; d < trackLen; d += 10) {
+      // Ballast shoulder + core
+      this.strokeLine(g, pts, 22, 0x171d23, 1);
+      this.strokeLine(g, pts, 18, 0x39424b, 1);
+      this.strokeLine(g, pts, 14, 0x4a535d, 1);
+      // Sleepers
+      let total = 0;
+      for (let i = 1; i < pts.length; i++) total += Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
+      for (let d = 0; d <= total; d += 9) {
         const p = pointAt(pts, d);
-        const a = angleAt(pts, d);
+        const a = angleAt(pts, Math.min(total - 0.01, Math.max(0.01, d)));
         const nx = -Math.sin(a), ny = Math.cos(a);
-        g.fillStyle(0x3d4750, 1); g.fillRect(p.x - 7, p.y - 7, 14, 14);
-        g.lineStyle(2, 0x5a4a3a, 1);
-        g.lineBetween(p.x + nx * 6, p.y + ny * 6, p.x - nx * 6, p.y - ny * 6);
+        g.lineStyle(3, 0x5b4632, 1);
+        g.lineBetween(p.x + nx * 8, p.y + ny * 8, p.x - nx * 8, p.y - ny * 8);
+        g.lineStyle(1, 0x3a2c1f, 0.8);
+        g.lineBetween(p.x + nx * 7, p.y + ny * 7 + 1, p.x - nx * 7, p.y - ny * 7 + 1);
       }
-      g.lineStyle(2, 0x95a5a6, 1);
-      for (const off of [-3, 3]) {
-        const a0 = angleAt(pts, 0), p0 = pointAt(pts, 0);
-        const a1 = angleAt(pts, trackLen), p1 = pointAt(pts, trackLen);
-        g.lineBetween(p0.x - Math.sin(a0) * off, p0.y + Math.cos(a0) * off, p1.x - Math.sin(a1) * off, p1.y + Math.cos(a1) * off);
+      // Rails
+      for (const off of [-4, 4]) {
+        this.strokeLine(g, pts, 3.2, 0x6d7c88, 1, off);
+        this.strokeLine(g, pts, 1.4, 0xd7e3ec, 0.95, off);
       }
     }
 
+    // Curved connectors: ballast + rails along every route polyline.
+    for (const r of this.routes) {
+      const pts = r.points;
+      this.strokeLine(g, pts, 16, 0x39424b, 0.9);
+      this.strokeLine(g, pts, 12, 0x46505a, 1);
+      for (const off of [-3.5, 3.5]) this.strokeLine(g, pts, 2.4, 0xb9c7d2, 0.9, off);
+    }
+
+    // Trees behind the station
+    for (const t of this.trees) {
+      g.fillStyle(0x0c1710, 0.35); g.fillEllipse(t.x + 3, t.y + 18, 26, 9);
+      g.fillStyle(0x5a3d2b, 1); g.fillRect(t.x - 3, t.y + 2, 6, 16);
+      g.fillStyle(0x1d5a2b, 1); g.fillCircle(t.x, t.y, 17);
+      g.fillStyle(0x2a7d38, 1); g.fillCircle(t.x - 6, t.y - 5, 12);
+      g.fillStyle(0x3ea34a, 1); g.fillCircle(t.x + 7, t.y - 6, 11);
+      g.fillStyle(0x66c96f, 0.7); g.fillCircle(t.x - 2, t.y - 12, 7);
+    }
+
+    // Platforms: concrete deck, tactile edge, canopy, benches, lamps.
     for (let i = 0; i < 4; i++) {
       const y = PLATFORM_Y[i];
       const hovered = this.hoverPlatform === i;
-      g.fillStyle(hovered ? 0x95a5a6 : 0x7f8c8d, 1);
-      g.fillRect(PLATFORM_X0, y - 26, PLATFORM_X1 - PLATFORM_X0, 20);
-      g.fillStyle(0xf1c40f, 0.9); g.fillRect(PLATFORM_X0, y - 8, PLATFORM_X1 - PLATFORM_X0, 3);
-      g.fillStyle(0x34495e, 1);
-      for (let x = PLATFORM_X0 + 40; x < PLATFORM_X1; x += 120) g.fillRect(x, y - 50, 4, 24);
-      g.fillStyle(0x2c3e50, 1); g.fillRect(PLATFORM_X0 + 20, y - 54, PLATFORM_X1 - PLATFORM_X0 - 40, 6);
-    }
-
-    g.lineStyle(3, 0x4a5560, 1);
-    for (const r of this.routes) {
-      const pts = r.points;
-      for (let k = 1; k < pts.length; k++) g.lineBetween(pts[k - 1].x, pts[k - 1].y, pts[k].x, pts[k].y);
+      const px = PLATFORM_X0, pw = PLATFORM_X1 - PLATFORM_X0;
+      // Platform shadow + deck
+      g.fillStyle(0x0d141a, 0.5); g.fillRect(px, y - 24, pw, 22);
+      g.fillStyle(hovered ? 0xa9b4bd : 0x8d98a2, 1); g.fillRect(px, y - 26, pw, 20);
+      g.fillStyle(0xb7c1c9, 1); g.fillRect(px, y - 26, pw, 3);
+      g.fillStyle(0x6e7982, 1); g.fillRect(px, y - 9, pw, 3);
+      // Tactile strip
+      g.fillStyle(0xf1c40f, 0.95); g.fillRect(px, y - 7, pw, 3);
+      for (let x = px + 2; x < px + pw; x += 12) { g.fillStyle(0x8a6d12, 0.6); g.fillRect(x, y - 7, 2, 3); }
+      // Canopy columns and roof with trim
+      g.fillStyle(0x2f3d49, 1);
+      for (let x = px + 50; x < px + pw - 20; x += 130) {
+        g.fillRect(x, y - 52, 5, 28);
+        g.fillStyle(0x1f2a33, 1); g.fillRect(x - 3, y - 25, 11, 3);
+        g.fillStyle(0x2f3d49, 1);
+      }
+      g.fillStyle(0x27343f, 1); g.fillRect(px + 20, y - 58, pw - 40, 7);
+      g.fillStyle(0x3c4d5b, 1); g.fillRect(px + 20, y - 58, pw - 40, 2);
+      g.fillStyle(0x162029, 1); g.fillRect(px + 20, y - 51, pw - 40, 2);
+      // Bench
+      g.fillStyle(0x5b4632, 1); g.fillRect(px + 90, y - 22, 34, 4);
+      g.fillStyle(0x4a3928, 1); g.fillRect(px + 92, y - 18, 3, 5); g.fillRect(px + 119, y - 18, 3, 5);
+      // Lamp posts
+      g.fillStyle(0x24323d, 1); g.fillRect(px + 30, y - 50, 3, 24);
+      g.fillStyle(0xffeaa7, 0.85); g.fillCircle(px + 31, y - 51, 3);
+      // Platform number board
+      g.fillStyle(0x101820, 1); g.fillRoundedRect(px + pw - 46, y - 50, 30, 16, 2);
+      g.fillStyle(0xf1c40f, 1); g.fillRect(px + pw - 43, y - 47, 24, 2);
     }
 
     for (const sig of this.signals) {
-      g.lineStyle(3, 0x7f8c8d, 1); g.lineBetween(sig.x, sig.y, sig.x, sig.y - 26);
+      // Post + signal head housing
+      g.lineStyle(4, 0x1a2229, 1); g.lineBetween(sig.x, sig.y, sig.x, sig.y - 26);
+      g.lineStyle(2, 0x6b7883, 1); g.lineBetween(sig.x, sig.y - 2, sig.x, sig.y - 24);
+      g.fillStyle(0x0e151b, 1); g.fillRoundedRect(sig.x - 11, sig.y - 43, 22, 22, 5);
+      g.fillStyle(0x2c3943, 1); g.fillRoundedRect(sig.x - 9, sig.y - 41, 18, 18, 4);
       const green = sig.state === 'green';
       const col = green ? 0x2ecc71 : 0xe74c3c;
       // Soft halo, brighter and gently pulsing while green.
@@ -484,12 +579,23 @@ export class GameScene extends Phaser.Scene {
       g.lineStyle(2, 0x000, 0.6); g.strokeCircle(sig.x, sig.y - 32, 8);
     }
 
-    // Station building below the platforms
-    g.fillStyle(0x27323c, 1); g.fillRect(520, 600, 240, 56);
-    g.fillStyle(0x3d4d5c, 1); g.fillRect(500, 592, 280, 12);
-    g.fillStyle(0xf1c40f, 0.8);
-    for (let x = 540; x < 750; x += 28) g.fillRect(x, 614, 16, 12);
-    g.fillStyle(0x81ecec, 0.7); g.fillRect(628, 632, 24, 24);
+    // Station building / concourse
+    g.fillStyle(0x0b1117, 0.5); g.fillRect(508, 606, 264, 56);
+    g.fillStyle(0x2b3945, 1); g.fillRect(520, 598, 240, 58);
+    g.fillStyle(0x3b4c5b, 1); g.fillRect(520, 598, 240, 8);
+    // Roof with overhang and ridge
+    g.fillStyle(0x1e2b35, 1); g.fillRect(498, 590, 284, 12);
+    g.fillStyle(0x46596a, 1); g.fillRect(498, 590, 284, 3);
+    g.fillStyle(0x121b23, 1); g.fillRect(498, 601, 284, 2);
+    // Windows
+    g.fillStyle(0xf7d774, 0.9);
+    for (let x = 538; x < 746; x += 30) { g.fillRect(x, 612, 18, 14); }
+    g.fillStyle(0xffffff, 0.22);
+    for (let x = 539; x < 747; x += 30) g.fillRect(x, 613, 4, 12);
+    // Entrance doors
+    g.fillStyle(0x10202b, 1); g.fillRect(626, 626, 28, 30);
+    g.fillStyle(0x81ecec, 0.7); g.fillRect(629, 629, 9, 12); g.fillRect(642, 629, 9, 12);
+    g.fillStyle(0xf1c40f, 1); g.fillRect(636, 618, 8, 3);
 
     // Junction markers
     for (const jx of [JUNC_W, JUNC_E]) {
