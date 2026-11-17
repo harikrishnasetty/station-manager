@@ -206,22 +206,11 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
-  private signalForRoute(routeId: string): boolean {
-    const routeSigs = this.signals.filter(s => s.routes.includes(routeId));
-    if (!routeSigs.every(s => s.state === 'green')) return false;
-    // Main approach signal governs entry from its side.
-    if (routeId.startsWith('w2p')) {
-      return this.signals.find(s => s.id === 'sig-w')?.state === 'green';
-    }
-    if (routeId.startsWith('e2p')) {
-      return this.signals.find(s => s.id === 'sig-e')?.state === 'green';
-    }
-    return true;
-  }
-
   private sideOf(t: Train): 'west' | 'east' {
     return t.routeId.startsWith('w2p') || t.routeId.endsWith('2w') ? 'west' : 'east';
   }
+
+  private sig(id: string) { return this.signals.find(s => s.id === id); }
 
   update(_time: number, dt: number): void {
     if (this.gameOver) return;
@@ -250,15 +239,17 @@ export class GameScene extends Phaser.Scene {
       if (this.throatOwner[side] === null) this.throatOwner[side] = t.id;
     }
 
-    // A waiting train is routed automatically: open the main signal for its
-    // side AND the entry signal of a free platform on that side.
+    // A waiting train is routed automatically: main signal for its side GREEN
+    // + that platform's signal on the same side GREEN -> set the route, then
+    // interlock: both platform signals and the main signal go RED.
     for (const t of this.trains) {
       if (t.state !== 'waiting') continue;
       const code = t.direction === 'west' ? 'w' : 'e';
-      const main = this.signals.find(s => s.id === (t.direction === 'west' ? 'sig-w' : 'sig-e'));
+      const end = code === 'w' ? 'left' : 'right';
+      const main = this.sig(code === 'w' ? 'sig-w' : 'sig-e');
       if (main?.state !== 'green') continue;
       for (let p = 0; p < 4; p++) {
-        const entry = this.signals.find(s => s.id === `sig-p${p}-in-${code}`);
+        const entry = this.sig(`sig-p${p}-${end}`);
         if (entry?.state !== 'green') continue;
         const occupied = this.trains.some(o => o.platform === p &&
           (o.state === 'approaching' || o.state === 'docked' || o.state === 'departing'));
@@ -266,6 +257,10 @@ export class GameScene extends Phaser.Scene {
         t.platform = p;
         t.routeId = `${code}2p${p}`;
         t.state = 'approaching';
+        // Consume the authority: entry, exit and main signal all lock red.
+        main.state = 'red';
+        this.sig(`sig-p${p}-left`)!.state = 'red';
+        this.sig(`sig-p${p}-right`)!.state = 'red';
         break;
       }
     }
@@ -282,8 +277,9 @@ export class GameScene extends Phaser.Scene {
       }
 
       if (t.state === 'approaching' || t.state === 'departing') {
-        // Only the throat owner may move; others wait for a clear path.
-        const clear = this.signalForRoute(t.routeId) && this.throatOwner[side] === t.id;
+        // Authority was already granted when the route was set; the throat
+        // token alone governs movement now.
+        const clear = this.throatOwner[side] === t.id;
         t.blocked = !clear;
         if (clear) t.speed = Math.min(t.speed + 46 * seconds, t.maxSpeed);
         else t.speed = Math.max(t.speed - 150 * seconds, 0);
@@ -306,11 +302,26 @@ export class GameScene extends Phaser.Scene {
         }
       } else if (t.state === 'docked') {
         t.dwellTimer -= seconds;
-        if (t.dwellTimer <= 0) {
+        if (t.dwellTimer <= 0 && t.platform !== null) {
+          // Exit toward the opposite side from which it arrived.
+          const exitEnd = t.direction === 'west' ? 'right' : 'left';
+          const exitSig = this.sig(`sig-p${t.platform}-${exitEnd}`);
+          if (exitSig?.state !== 'green') {
+            t.blocked = true; // waiting for the exit signal
+            continue;
+          }
+          // Interlock: opening the exit locks the main signal on that side.
+          const exitMain = this.sig(t.direction === 'west' ? 'sig-e' : 'sig-w');
+          if (exitMain) exitMain.state = 'red';
+          exitSig.state = 'red';
+          this.sig(`sig-p${t.platform}-left`)!.state = 'red';
+          this.sig(`sig-p${t.platform}-right`)!.state = 'red';
+
           t.state = 'departing';
           t.routeId = `${t.direction === 'west' ? 'p' + t.platform + '2e' : 'p' + t.platform + '2w'}`;
           t.progress = 8;
           t.speed = 0;
+          t.blocked = false;
         }
       }
     }
@@ -386,10 +397,10 @@ export class GameScene extends Phaser.Scene {
       let txt = STATE_TEXT[t.state] + (t.platform !== null ? '  P' + (t.platform + 1) : '');
       if (t.blocked && (t.state === 'approaching' || t.state === 'departing')) txt = 'STOPPED - red light or path busy';
       if (t.state === 'docked' && t.dwellTimer <= 0) {
-        const outSide = t.direction === 'west' ? 'E' : 'W';
-        txt = `READY - open OUT-${outSide} (${outSide === 'E' ? 'right' : 'left'} end)`;
+        const exitEnd = t.direction === 'west' ? 'RIGHT' : 'LEFT';
+        txt = `READY - open P${(t.platform ?? 0) + 1}-${exitEnd} signal to depart`;
       }
-      if (t.state === 'waiting') txt = 'WAITING - open main W/E + platform IN signal';
+      if (t.state === 'waiting') txt = 'WAITING - open main W/E + platform signal';
       view.label.setText(`${t.id}  ${txt}`);
       view.label.setColor(t.blocked ? '#ff7675' : sel ? '#ffeaa7' : '#ffffff');
       view.halo.clear();

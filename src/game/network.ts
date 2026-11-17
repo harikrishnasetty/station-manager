@@ -69,21 +69,17 @@ export function buildNetwork(): { routes: Route[]; signals: Signal[]; tracks: Tr
     ]));
   }
 
-  // Signals are the controls: the main signals govern entry from each side,
-  // each platform has an ENTRY signal at each end (which platform a waiting
-  // train is routed to) and an EXIT signal at each end (which way it leaves).
+  // One signal at each platform end. A signal's meaning depends on the route:
+  // green = "allow a train in from this side" (when the platform is free) or
+  // "allow a train out to this side" (when a train is ready to depart).
   const signals: Signal[] = [
     { id: 'sig-w', x: JUNC_W - 30, y: MAIN_IN_Y, state: 'red', routes: [], label: 'W' },
     { id: 'sig-e', x: JUNC_E + 30, y: MAIN_IN_Y, state: 'red', routes: [], label: 'E' },
   ];
   for (let i = 0; i < 4; i++) {
     const y = PLATFORM_Y[i];
-    // Left end: entry for west-arrivals, exit for west-departures.
-    signals.push({ id: `sig-p${i}-in-w`, x: PLATFORM_X0 - 48, y, state: 'red', routes: [], label: `IN${i + 1}W` });
-    signals.push({ id: `sig-p${i}-out-w`, x: PLATFORM_X0 - 16, y, state: 'red', routes: [`p${i}2w`], label: `OUT${i + 1}W` });
-    // Right end: exit for east-departures, entry for east-arrivals.
-    signals.push({ id: `sig-p${i}-out-e`, x: PLATFORM_X1 + 16, y, state: 'red', routes: [`p${i}2e`], label: `OUT${i + 1}E` });
-    signals.push({ id: `sig-p${i}-in-e`, x: PLATFORM_X1 + 48, y, state: 'red', routes: [], label: `IN${i + 1}E` });
+    signals.push({ id: `sig-p${i}-left`, x: PLATFORM_X0 - 24, y, state: 'red', routes: [], label: `P${i + 1}L` });
+    signals.push({ id: `sig-p${i}-right`, x: PLATFORM_X1 + 24, y, state: 'red', routes: [], label: `P${i + 1}R` });
   }
 
   return { routes, signals, tracks };
