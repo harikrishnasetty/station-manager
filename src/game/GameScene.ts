@@ -139,6 +139,7 @@ export class GameScene extends Phaser.Scene {
       dwellTimer: 0,
       freight,
       blocked: false,
+      exitLocked: false,
     };
     this.trains.push(t);
     this.buildView(t);
@@ -200,7 +201,7 @@ export class GameScene extends Phaser.Scene {
     // Signals: generous hitbox over the post + head so they're easy to click.
     for (const sig of this.signals) {
       if (Math.abs(x - sig.x) < 16 && y > sig.y - 44 && y < sig.y + 6) {
-        sig.state = sig.state === 'red' ? 'green' : 'red';
+        this.setSignal(sig.id, sig.state === 'red' ? 'green' : 'red');
         return;
       }
     }
@@ -211,6 +212,12 @@ export class GameScene extends Phaser.Scene {
   }
 
   private sig(id: string) { return this.signals.find(s => s.id === id); }
+
+  /** Change an aspect and stamp the time so green is visibly held. */
+  private setSignal(id: string, state: 'red' | 'green'): void {
+    const s = this.sig(id);
+    if (s && s.state !== state) { s.state = state; s.changedAt = this.elapsed; }
+  }
 
   update(_time: number, dt: number): void {
     if (this.gameOver) return;
@@ -240,27 +247,25 @@ export class GameScene extends Phaser.Scene {
     }
 
     // A waiting train is routed automatically: main signal for its side GREEN
-    // + that platform's signal on the same side GREEN -> set the route, then
-    // interlock: both platform signals and the main signal go RED.
+    // + that platform's signal on the same side GREEN (held briefly so the
+    // green is clearly visible) -> set the route. Signals lock red on arrival.
+    const GREEN_DWELL = 0.4;
     for (const t of this.trains) {
       if (t.state !== 'waiting') continue;
       const code = t.direction === 'west' ? 'w' : 'e';
       const end = code === 'w' ? 'left' : 'right';
-      const main = this.sig(code === 'w' ? 'sig-w' : 'sig-e');
-      if (main?.state !== 'green') continue;
+      const mainId = code === 'w' ? 'sig-w' : 'sig-e';
+      const main = this.sig(mainId);
+      if (main?.state !== 'green' || this.elapsed - main.changedAt < GREEN_DWELL) continue;
       for (let p = 0; p < 4; p++) {
         const entry = this.sig(`sig-p${p}-${end}`);
-        if (entry?.state !== 'green') continue;
+        if (entry?.state !== 'green' || this.elapsed - entry.changedAt < GREEN_DWELL) continue;
         const occupied = this.trains.some(o => o.platform === p &&
           (o.state === 'approaching' || o.state === 'docked' || o.state === 'departing'));
         if (occupied) continue;
         t.platform = p;
         t.routeId = `${code}2p${p}`;
         t.state = 'approaching';
-        // Consume the authority: entry, exit and main signal all lock red.
-        main.state = 'red';
-        this.sig(`sig-p${p}-left`)!.state = 'red';
-        this.sig(`sig-p${p}-right`)!.state = 'red';
         break;
       }
     }
@@ -292,6 +297,20 @@ export class GameScene extends Phaser.Scene {
           t.state = 'docked';
           t.dwellTimer = 4 + Math.random() * 3;
           this.score += 50;
+          // Train is in the platform: entry, exit and approach main go red.
+          if (t.platform !== null) {
+            this.setSignal(t.direction === 'west' ? 'sig-w' : 'sig-e', 'red');
+            this.setSignal(`sig-p${t.platform}-left`, 'red');
+            this.setSignal(`sig-p${t.platform}-right`, 'red');
+          }
+        }
+
+        if (t.state === 'departing' && !t.exitLocked && t.progress > 80 && t.platform !== null) {
+          // The train has cleared the platform signal: lock that side's main.
+          this.setSignal(t.direction === 'west' ? 'sig-e' : 'sig-w', 'red');
+          this.setSignal(`sig-p${t.platform}-left`, 'red');
+          this.setSignal(`sig-p${t.platform}-right`, 'red');
+          t.exitLocked = true;
         }
 
         if (t.state === 'departing' && t.progress >= L + 12) {
@@ -305,22 +324,20 @@ export class GameScene extends Phaser.Scene {
         if (t.dwellTimer <= 0 && t.platform !== null) {
           // Exit toward the opposite side from which it arrived.
           const exitEnd = t.direction === 'west' ? 'right' : 'left';
-          const exitSig = this.sig(`sig-p${t.platform}-${exitEnd}`);
-          if (exitSig?.state !== 'green') {
-            t.blocked = true; // waiting for the exit signal
+          const exitId = `sig-p${t.platform}-${exitEnd}`;
+          const exitSig = this.sig(exitId);
+          // Hold green briefly so the aspect is clearly visible before departure.
+          if (exitSig?.state !== 'green' || this.elapsed - exitSig.changedAt < GREEN_DWELL) {
+            t.blocked = true;
             continue;
           }
-          // Interlock: opening the exit locks the main signal on that side.
-          const exitMain = this.sig(t.direction === 'west' ? 'sig-e' : 'sig-w');
-          if (exitMain) exitMain.state = 'red';
-          exitSig.state = 'red';
-          this.sig(`sig-p${t.platform}-left`)!.state = 'red';
-          this.sig(`sig-p${t.platform}-right`)!.state = 'red';
-
+          // Leave the exit signal green while the train pulls away; the main
+          // on that side locks red once it clears the platform (see above).
           t.state = 'departing';
           t.routeId = `${t.direction === 'west' ? 'p' + t.platform + '2e' : 'p' + t.platform + '2w'}`;
           t.progress = 8;
           t.speed = 0;
+          t.exitLocked = false;
           t.blocked = false;
         }
       }
@@ -457,9 +474,13 @@ export class GameScene extends Phaser.Scene {
 
     for (const sig of this.signals) {
       g.lineStyle(3, 0x7f8c8d, 1); g.lineBetween(sig.x, sig.y, sig.x, sig.y - 26);
-      const col = sig.state === 'green' ? 0x2ecc71 : 0xe74c3c;
-      g.fillStyle(col, 0.25); g.fillCircle(sig.x, sig.y - 32, 14);
+      const green = sig.state === 'green';
+      const col = green ? 0x2ecc71 : 0xe74c3c;
+      // Soft halo, brighter and gently pulsing while green.
+      const pulse = green ? 0.28 + 0.12 * Math.sin(this.elapsed * 5) : 0.18;
+      g.fillStyle(col, pulse); g.fillCircle(sig.x, sig.y - 32, green ? 17 : 13);
       g.fillStyle(col, 1); g.fillCircle(sig.x, sig.y - 32, 8);
+      g.fillStyle(0xffffff, green ? 0.5 : 0.15); g.fillCircle(sig.x - 2, sig.y - 34, 2.5);
       g.lineStyle(2, 0x000, 0.6); g.strokeCircle(sig.x, sig.y - 32, 8);
     }
 

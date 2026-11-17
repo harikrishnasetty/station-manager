@@ -73,13 +73,13 @@ export function buildNetwork(): { routes: Route[]; signals: Signal[]; tracks: Tr
   // green = "allow a train in from this side" (when the platform is free) or
   // "allow a train out to this side" (when a train is ready to depart).
   const signals: Signal[] = [
-    { id: 'sig-w', x: JUNC_W - 30, y: MAIN_IN_Y, state: 'red', routes: [], label: 'W' },
-    { id: 'sig-e', x: JUNC_E + 30, y: MAIN_IN_Y, state: 'red', routes: [], label: 'E' },
+    { id: 'sig-w', x: JUNC_W - 30, y: MAIN_IN_Y, state: 'red', changedAt: 0, routes: [], label: 'W' },
+    { id: 'sig-e', x: JUNC_E + 30, y: MAIN_IN_Y, state: 'red', changedAt: 0, routes: [], label: 'E' },
   ];
   for (let i = 0; i < 4; i++) {
     const y = PLATFORM_Y[i];
-    signals.push({ id: `sig-p${i}-left`, x: PLATFORM_X0 - 24, y, state: 'red', routes: [], label: `P${i + 1}L` });
-    signals.push({ id: `sig-p${i}-right`, x: PLATFORM_X1 + 24, y, state: 'red', routes: [], label: `P${i + 1}R` });
+    signals.push({ id: `sig-p${i}-left`, x: PLATFORM_X0 - 24, y, state: 'red', changedAt: 0, routes: [], label: `P${i + 1}L` });
+    signals.push({ id: `sig-p${i}-right`, x: PLATFORM_X1 + 24, y, state: 'red', changedAt: 0, routes: [], label: `P${i + 1}R` });
   }
 
   return { routes, signals, tracks };

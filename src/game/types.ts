@@ -13,6 +13,8 @@ export interface Signal {
   x: number;
   y: number;
   state: SignalState;
+  /** Simulation time when the aspect last changed (for visible dwell). */
+  changedAt: number;
   /** Which route(s) this signal protects. */
   routes: string[];
   label: string;
@@ -45,6 +47,7 @@ export interface Train {
   dwellTimer: number;
   freight: boolean;
   blocked: boolean;
+  exitLocked: boolean;
 }
 
 export interface Track {
