@@ -204,30 +204,19 @@ export class GameScene extends Phaser.Scene {
         return;
       }
     }
-
-    // 3) Assign a platform.
-    for (let i = 0; i < 4; i++) {
-      if (y > PLATFORM_Y[i] - 70 && y < PLATFORM_Y[i] + 20 && x > PLATFORM_X0 - 10 && x < PLATFORM_X1 + 10) {
-        const occupied = this.trains.some(t => t.platform === i && (t.state === 'docked' || t.state === 'approaching' || t.state === 'departing'));
-        if (occupied) return;
-        let train = this.selectedId ? this.trains.find(t => t.id === this.selectedId && t.state === 'waiting') : undefined;
-        if (!train) {
-          train = this.trains.filter(t => t.state === 'waiting')
-            .sort((a, b) => (b.holdProgress - b.progress) - (a.holdProgress - a.progress))[0];
-        }
-        if (train) {
-          train.platform = i;
-          train.routeId = `${train.direction === 'west' ? 'w' : 'e'}2p${i}`;
-          train.state = 'approaching';
-          this.selectedId = null;
-        }
-        return;
-      }
-    }
   }
 
   private signalForRoute(routeId: string): boolean {
-    return this.signals.filter(s => s.routes.includes(routeId)).every(s => s.state === 'green');
+    const routeSigs = this.signals.filter(s => s.routes.includes(routeId));
+    if (!routeSigs.every(s => s.state === 'green')) return false;
+    // Main approach signal governs entry from its side.
+    if (routeId.startsWith('w2p')) {
+      return this.signals.find(s => s.id === 'sig-w')?.state === 'green';
+    }
+    if (routeId.startsWith('e2p')) {
+      return this.signals.find(s => s.id === 'sig-e')?.state === 'green';
+    }
+    return true;
   }
 
   private sideOf(t: Train): 'west' | 'east' {
@@ -259,6 +248,26 @@ export class GameScene extends Phaser.Scene {
       if (t.state !== 'approaching' && t.state !== 'departing') continue;
       const side = this.sideOf(t);
       if (this.throatOwner[side] === null) this.throatOwner[side] = t.id;
+    }
+
+    // A waiting train is routed automatically: open the main signal for its
+    // side AND the entry signal of a free platform on that side.
+    for (const t of this.trains) {
+      if (t.state !== 'waiting') continue;
+      const code = t.direction === 'west' ? 'w' : 'e';
+      const main = this.signals.find(s => s.id === (t.direction === 'west' ? 'sig-w' : 'sig-e'));
+      if (main?.state !== 'green') continue;
+      for (let p = 0; p < 4; p++) {
+        const entry = this.signals.find(s => s.id === `sig-p${p}-in-${code}`);
+        if (entry?.state !== 'green') continue;
+        const occupied = this.trains.some(o => o.platform === p &&
+          (o.state === 'approaching' || o.state === 'docked' || o.state === 'departing'));
+        if (occupied) continue;
+        t.platform = p;
+        t.routeId = `${code}2p${p}`;
+        t.state = 'approaching';
+        break;
+      }
     }
 
     for (const t of this.trains) {
@@ -380,7 +389,7 @@ export class GameScene extends Phaser.Scene {
         const outSide = t.direction === 'west' ? 'E' : 'W';
         txt = `READY - open OUT-${outSide} (${outSide === 'E' ? 'right' : 'left'} end)`;
       }
-      if (t.state === 'waiting') txt = 'WAITING - click me, then a platform';
+      if (t.state === 'waiting') txt = 'WAITING - open main W/E + platform IN signal';
       view.label.setText(`${t.id}  ${txt}`);
       view.label.setColor(t.blocked ? '#ff7675' : sel ? '#ffeaa7' : '#ffffff');
       view.halo.clear();
