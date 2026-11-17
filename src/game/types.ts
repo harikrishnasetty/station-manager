@@ -23,6 +23,7 @@ export interface Signal {
 /** waiting: at the holding signal. approaching: entering a platform.
  *  docked: at the platform. departing: leaving the station. */
 export type TrainState = 'waiting' | 'approaching' | 'docked' | 'departing';
+export type TrainType = 'local' | 'express' | 'goods';
 
 export interface Car {
   kind: 'loco' | 'coach' | 'wagon';
@@ -33,6 +34,7 @@ export interface Car {
 export interface Train {
   id: string;
   name: string;
+  type: TrainType;
   state: TrainState;
   direction: 'west' | 'east';
   routeId: string;

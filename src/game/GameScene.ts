@@ -1,8 +1,8 @@
 import Phaser from 'phaser';
-import type { Car, Route, Train, TrainState } from './types';
+import type { Car, Route, Train, TrainType } from './types';
 import {
   buildNetwork, pointAt, angleAt, W, H,
-  PLATFORM_Y, PLATFORM_X0, PLATFORM_X1, MAIN_Y, MAIN_IN_Y,
+  PLATFORM_Y, PLATFORM_X0, PLATFORM_X1, MAIN_Y, MAIN_IN_Y, MAIN_OUT_Y,
   HOLD_PROGRESS,
 } from './network';
 
@@ -12,13 +12,6 @@ interface TrainView {
   label: Phaser.GameObjects.Text;
   halo: Phaser.GameObjects.Graphics;
 }
-
-const STATE_TEXT: Record<TrainState, string> = {
-  waiting: 'WAITING - assign platform',
-  approaching: 'APPROACHING',
-  docked: 'DOCKED',
-  departing: 'DEPARTING',
-};
 
 export class GameScene extends Phaser.Scene {
   private routes!: Route[];
@@ -79,8 +72,8 @@ export class GameScene extends Phaser.Scene {
     this.cameras.main.setBackgroundColor('#1e272e');
     this.gfx = this.add.graphics().setDepth(1);
 
-    this.add.text(20, MAIN_Y - 66, 'WEST MAIN', { fontSize: '11px', color: '#7f8c8d' });
-    this.add.text(W - 110, MAIN_Y - 66, 'EAST MAIN', { fontSize: '11px', color: '#7f8c8d' });
+    this.add.text(20, MAIN_Y - 66, 'WEST MAIN  (BYPASS)', { fontSize: '11px', color: '#2ecc71' });
+    this.add.text(W - 190, MAIN_Y - 66, 'EAST MAIN  (BYPASS)', { fontSize: '11px', color: '#2ecc71' });
     this.add.text(70, MAIN_IN_Y - 78, 'WEST BAY', { fontSize: '11px', color: '#81ecec' });
     this.add.text(W - 200, MAIN_IN_Y - 78, 'EAST BAY', { fontSize: '11px', color: '#81ecec' });
     for (let i = 0; i < 4; i++) {
@@ -125,15 +118,22 @@ export class GameScene extends Phaser.Scene {
     });
     if (alreadyWaiting || conflict) return;
 
-    const freight = Math.random() < 0.35;
+    // Service mix: local trains stop at platforms; express & goods use the bypass.
+    const roll = Math.random();
+    const type: TrainType = roll < 0.5 ? 'local' : roll < 0.75 ? 'express' : 'goods';
     const colors = [0xc0392b, 0x2980b9, 0x27ae60, 0x8e44ad, 0xe67e22];
-    const color = colors[Math.floor(Math.random() * colors.length)];
-    const cars: Car[] = freight
+    const color = type === 'express' ? 0x2980b9 : type === 'goods' ? 0xe67e22 : colors[Math.floor(Math.random() * colors.length)];
+    const cars: Car[] = type === 'goods'
       ? [
           { kind: 'loco', offset: 0, length: 60 },
           { kind: 'wagon', offset: 68, length: 52 },
           { kind: 'wagon', offset: 124, length: 52 },
           { kind: 'wagon', offset: 180, length: 52 },
+        ]
+      : type === 'express'
+      ? [
+          { kind: 'loco', offset: 0, length: 58 },
+          { kind: 'coach', offset: 66, length: 54 },
         ]
       : [
           { kind: 'loco', offset: 0, length: 58 },
@@ -144,20 +144,21 @@ export class GameScene extends Phaser.Scene {
 
     const t: Train = {
       id: `T${this.trainId++}`,
-      name: `${freight ? 'Freight' : 'Passenger'}`,
+      name: type,
+      type,
       state: 'waiting',
       direction: dir,
-      routeId: dir === 'west' ? 'w2p0' : 'e2p0',
+      routeId: type === 'local' ? (dir === 'west' ? 'w2p0' : 'e2p0') : (dir === 'west' ? 'w2b' : 'e2b'),
       progress: HOLD_PROGRESS,
       holdProgress: HOLD_PROGRESS,
       speed: 0,
-      maxSpeed: freight ? 58 : 82,
+      maxSpeed: type === 'express' ? 118 : type === 'goods' ? 55 : 82,
       cars,
       length,
       color,
       platform: null,
       dwellTimer: 0,
-      freight,
+      freight: type === 'goods',
       blocked: false,
       exitLocked: false,
     };
@@ -168,7 +169,8 @@ export class GameScene extends Phaser.Scene {
   private buildView(t: Train): void {
     const sprites: Phaser.GameObjects.Sprite[] = [];
     const offsets: number[] = [];
-    const locoKey = t.color === 0xc0392b ? 'loco-red' : t.color === 0x2980b9 ? 'loco-blue' : 'loco-green';
+    const locoKey = t.type === 'express' ? 'loco-express'
+      : t.color === 0xc0392b ? 'loco-red' : t.color === 0x2980b9 ? 'loco-blue' : 'loco-green';
     t.cars.forEach((car, i) => {
       let key = locoKey;
       if (car.kind === 'coach') key = 'coach';
@@ -228,6 +230,8 @@ export class GameScene extends Phaser.Scene {
   }
 
   private sideOf(t: Train): 'west' | 'east' {
+    if (t.routeId === 'w2b') return 'west';
+    if (t.routeId === 'e2b') return 'east';
     return t.routeId.startsWith('w2p') || t.routeId.endsWith('2w') ? 'west' : 'east';
   }
 
@@ -277,6 +281,14 @@ export class GameScene extends Phaser.Scene {
       const mainId = code === 'w' ? 'sig-w' : 'sig-e';
       const main = this.sig(mainId);
       if (main?.state !== 'green' || this.elapsed - main.changedAt < GREEN_DWELL) continue;
+
+      // Express & goods don't need a platform: the main signal alone clears
+      // the through/bypass line.
+      if (t.type !== 'local') {
+        t.state = 'approaching';
+        continue;
+      }
+
       for (let p = 0; p < 4; p++) {
         const entry = this.sig(`sig-p${p}-${end}`);
         if (entry?.state !== 'green' || this.elapsed - entry.changedAt < GREEN_DWELL) continue;
@@ -311,7 +323,7 @@ export class GameScene extends Phaser.Scene {
         t.progress += t.speed * seconds;
         if (!clear) { t.progress = Math.max(0, t.progress - 0); t.speed = 0; }
 
-        if (t.state === 'approaching' && t.progress >= L - 8) {
+        if (t.state === 'approaching' && t.platform !== null && t.progress >= L - 8) {
           t.progress = L - 8;
           t.speed = 0;
           t.state = 'docked';
@@ -333,9 +345,15 @@ export class GameScene extends Phaser.Scene {
           t.exitLocked = true;
         }
 
-        if (t.state === 'departing' && t.progress >= L + 12) {
-          this.served++;
-          this.score += 100;
+        if (t.progress >= L + 12) {
+          if (t.state === 'departing') {
+            this.served++;
+            this.score += 100;
+          } else if (t.platform === null) {
+            // Through train cleared the bypass without stopping.
+            this.served++;
+            this.score += t.type === 'express' ? 250 : 180;
+          }
           this.removeTrain(t.id);
           continue;
         }
@@ -429,20 +447,33 @@ export class GameScene extends Phaser.Scene {
         sp.setRotation(angleAt(pts, d));
       });
       const head = pointAt(pts, t.progress);
-      view.label.setPosition(head.x, head.y - 34);
+      view.label.setPosition(head.x, head.y - 40);
       const sel = t.id === this.selectedId;
-      let txt = STATE_TEXT[t.state] + (t.platform !== null ? '  P' + (t.platform + 1) : '');
-      if (t.blocked && (t.state === 'approaching' || t.state === 'departing')) txt = 'STOPPED - red light or path busy';
+      const kind = t.type === 'express' ? 'EXPRESS' : t.type === 'goods' ? 'GOODS' : 'LOCAL';
+      const arrow = t.direction === 'west' ? '>>EAST' : 'WEST<<';
+      let txt = `${kind} ${arrow}` + (t.platform !== null ? '  P' + (t.platform + 1) : '');
+      if (t.blocked && (t.state === 'approaching' || t.state === 'departing')) txt += '  STOPPED';
       if (t.state === 'docked' && t.dwellTimer <= 0) {
         const exitEnd = t.direction === 'west' ? 'RIGHT' : 'LEFT';
-        txt = `READY - open P${(t.platform ?? 0) + 1}-${exitEnd} signal to depart`;
+        txt = `${kind} ${arrow}  READY - open P${(t.platform ?? 0) + 1}-${exitEnd}`;
       }
-      if (t.state === 'waiting') txt = 'WAITING - open main W/E + platform signal';
+      if (t.state === 'waiting') txt = `${kind} ${arrow}  WAITING`;
       view.label.setText(`${t.id}  ${txt}`);
-      view.label.setColor(t.blocked ? '#ff7675' : sel ? '#ffeaa7' : '#ffffff');
+      const labelColor = t.type === 'express' ? '#81ecec' : t.type === 'goods' ? '#f6b93b' : '#ffffff';
+      view.label.setColor(t.blocked ? '#ff7675' : sel ? '#ffeaa7' : labelColor);
       view.halo.clear();
-      // Headlight beam ahead of the leading car.
+      // Direction chevron above the loco — unmistakable even when stationary.
       const ang = angleAt(pts, t.progress);
+      view.halo.fillStyle(t.type === 'express' ? 0x81ecec : t.type === 'goods' ? 0xf6b93b : 0xffffff, 0.95);
+      view.halo.fillTriangle(
+        head.x + Math.cos(ang) * 18 - Math.sin(ang) * 7,
+        head.y + Math.sin(ang) * 18 + Math.cos(ang) * 7,
+        head.x + Math.cos(ang) * 18 + Math.sin(ang) * 7,
+        head.y + Math.sin(ang) * 18 - Math.cos(ang) * 7,
+        head.x + Math.cos(ang) * 29,
+        head.y + Math.sin(ang) * 29,
+      );
+      // Headlight beam ahead of the leading car.
       const hx = head.x + Math.cos(ang) * 26, hy = head.y + Math.sin(ang) * 26;
       view.halo.fillStyle(0xfff3b0, 0.16); view.halo.fillCircle(hx, hy, 22);
       view.halo.fillStyle(0xfff9d6, 0.28); view.halo.fillCircle(hx, hy, 10);
@@ -603,10 +634,9 @@ export class GameScene extends Phaser.Scene {
       g.fillTriangle(jx - 9, MAIN_Y + 9, jx + 9, MAIN_Y + 9, jx, MAIN_Y - 9);
     }
 
-    // Arrival (upper) and departure (lower) main line legend
-    g.fillStyle(0x95a5a6, 1);
-    g.fillRect(20, MAIN_IN_Y - 3, 18, 2);
-    g.fillRect(20, 352 - 3, 18, 2);
+    // Bypass / fast line accent along the two mains.
+    this.strokeLine(g, [{ x: 0, y: MAIN_IN_Y }, { x: W, y: MAIN_IN_Y }], 2, 0x2ecc71, 0.75, 0);
+    this.strokeLine(g, [{ x: 0, y: MAIN_OUT_Y }, { x: W, y: MAIN_OUT_Y }], 2, 0x2ecc71, 0.75, 0);
 
     // Waiting bays
     g.lineStyle(2, 0x3498db, 0.9);

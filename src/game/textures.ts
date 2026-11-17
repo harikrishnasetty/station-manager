@@ -84,6 +84,33 @@ export function makeLoco(scene: Phaser.Scene, key: string, color: number): void 
   gr.destroy();
 }
 
+/** Streamlined express locomotive — sleeker, silver with a cyan stripe. */
+export function makeExpress(scene: Phaser.Scene, key: string): void {
+  const gr = g(scene);
+  const L = 84, W = 28;
+  gr.fillStyle(0x000000, 0.28); gr.fillRoundedRect(3, 4, L, W, 6);
+  gr.fillStyle(0x161d24, 1); gr.fillRoundedRect(-2, -2, L + 4, W + 4, 4);
+  wheels(gr, L, W);
+  // Sleek body
+  gr.fillStyle(0x8f9fa8, 1); gr.fillRoundedRect(0, 0, L, W, 7);
+  gr.fillStyle(0xc7d2d9, 1); gr.fillRoundedRect(0, 1, L, W - 4, 7);
+  gr.fillStyle(0xffffff, 0.45); gr.fillRect(5, 3, L - 12, 2);
+  // Cyan speed stripe
+  gr.fillStyle(0x00bcd4, 1); gr.fillRect(6, W / 2 - 2, L - 20, 4);
+  gr.fillStyle(0x81ecec, 0.7); gr.fillRect(6, W / 2 - 2, L - 20, 1);
+  // Tapered aerodynamic nose
+  gr.fillStyle(0x2b3a46, 1); gr.fillRoundedRect(L - 22, 3, 21, W - 6, 6);
+  gr.fillStyle(0x86dff0, 0.95); gr.fillRoundedRect(L - 18, 5, 13, W - 10, 3);
+  gr.fillStyle(0xffffff, 0.3); gr.fillRect(L - 17, 6, 4, W - 12);
+  // Headlights
+  gr.fillStyle(0xe8ffff, 1); gr.fillCircle(L - 2, 8, 2.6); gr.fillCircle(L - 2, W - 8, 2.6);
+  // Roof equipment
+  gr.fillStyle(0x3b4d5b, 1); gr.fillRoundedRect(12, 7, 26, W - 14, 3);
+  gr.lineStyle(1, 0x81ecec, 0.6); gr.lineBetween(14, 9, 36, 9);
+  gr.generateTexture(key, L + 6, W + 8);
+  gr.destroy();
+}
+
 /** Passenger coach. */
 export function makeCoach(scene: Phaser.Scene, key: string, color: number): void {
   const gr = g(scene);

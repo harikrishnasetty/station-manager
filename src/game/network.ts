@@ -96,6 +96,15 @@ export function buildNetwork(): { routes: Route[]; signals: Signal[]; tracks: Tr
     ]));
   }
 
+  // Bypass / fast line: through trains run straight across on the arrival
+  // (west->east) and departure (east->west) mains without touching a platform.
+  routes.push(route('w2b', [
+    { x: -40, y: MAIN_IN_Y }, { x: W + 40, y: MAIN_IN_Y },
+  ]));
+  routes.push(route('e2b', [
+    { x: W + 40, y: MAIN_OUT_Y }, { x: -40, y: MAIN_OUT_Y },
+  ]));
+
   // One signal at each platform end. A signal's meaning depends on the route:
   // green = "allow a train in from this side" (when the platform is free) or
   // "allow a train out to this side" (when a train is ready to depart).
