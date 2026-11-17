@@ -14,3 +14,7 @@ const config: Phaser.Types.Core.GameConfig = {
 
 const game = new Phaser.Game(config);
 (window as unknown as { __game: Phaser.Game }).__game = game;
+
+document.getElementById('help-btn')?.addEventListener('click', () => {
+  document.getElementById('help')?.classList.toggle('hidden');
+});

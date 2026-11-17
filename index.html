@@ -7,58 +7,77 @@
     <title>Station Manager</title>
     <style>
       * { box-sizing: border-box; }
-      body { margin: 0; background: #14181d; color: #e8edf2; font-family: 'Segoe UI', Arial, sans-serif; }
+      body { margin: 0; background: #14181d; color: #e8edf2; font-family: 'Segoe UI', Arial, sans-serif; overflow: hidden; }
       #app { width: 100vw; height: 100vh; }
-      #hud {
-        position: absolute; top: 12px; left: 12px; background: rgba(10,16,22,0.86);
-        border: 1px solid #31404d; border-radius: 10px; padding: 12px 14px;
-        font-size: 13px; min-width: 190px; box-shadow: 0 8px 24px rgba(0,0,0,.4);
+
+      /* Compact top bar */
+      #topbar {
+        position: absolute; top: 0; left: 0; right: 0; height: 54px;
+        display: flex; align-items: center; gap: 18px; padding: 0 18px;
+        background: linear-gradient(180deg, rgba(12,18,24,.96), rgba(12,18,24,.82));
+        border-bottom: 1px solid #2b3945; z-index: 10;
       }
-      #hud h1 { margin: 0 0 8px; font-size: 16px; color: #f1c40f; letter-spacing: .3px; }
-      #hud .row { display: flex; justify-content: space-between; gap: 20px; margin: 3px 0; }
-      #hud .row span:last-child { font-weight: bold; color: #fff; }
-      #objective {
-        position: absolute; top: 12px; right: 12px; background: rgba(10,16,22,0.86);
-        border: 1px solid #31404d; border-radius: 10px; padding: 12px 14px;
-        font-size: 12px; max-width: 320px; line-height: 1.55;
+      #brand { font-weight: 700; font-size: 15px; color: #f1c40f; letter-spacing: .6px; white-space: nowrap; }
+      #brand small { display: block; font-size: 9px; color: #7f8c8d; font-weight: 400; letter-spacing: 1px; }
+      .stats { display: flex; gap: 16px; margin-left: auto; }
+      .stat { text-align: center; min-width: 56px; }
+      .stat .label { display: block; font-size: 9px; letter-spacing: 1px; color: #7f8c8d; }
+      .stat b { font-size: 16px; color: #fff; font-variant-numeric: tabular-nums; }
+      .stat.warn b { color: #ff7675; }
+      .stat.good b { color: #2ecc71; }
+      .icon-btn {
+        width: 30px; height: 30px; border-radius: 6px; border: 1px solid #3a4a58;
+        background: #1b262f; color: #ecf0f1; font-size: 14px; cursor: pointer;
       }
-      #objective b { color: #f1c40f; }
-      #hint {
-        position: absolute; bottom: 12px; left: 50%; transform: translateX(-50%);
-        background: rgba(10,16,22,0.9); border: 1px solid #31404d; border-radius: 10px;
-        padding: 10px 16px; font-size: 12px; text-align: center; max-width: 860px; line-height: 1.5;
+      .icon-btn:hover { background: #273846; }
+
+      /* Single-line contextual hint */
+      #statusbar {
+        position: absolute; bottom: 14px; left: 50%; transform: translateX(-50%);
+        background: rgba(12,18,24,.9); border: 1px solid #2b3945; border-radius: 20px;
+        padding: 8px 18px; font-size: 12px; color: #cfd8e0; white-space: nowrap; z-index: 10;
       }
-      .k { color: #81ecec; font-weight: bold; }
+      #statusbar b { color: #f1c40f; }
+
+      /* Help panel: hidden until toggled */
+      #help {
+        position: absolute; top: 66px; right: 18px; width: 300px;
+        background: rgba(12,18,24,.96); border: 1px solid #3a4a58; border-radius: 10px;
+        padding: 14px 16px; font-size: 12px; line-height: 1.6; color: #cfd8e0;
+        box-shadow: 0 12px 30px rgba(0,0,0,.5); z-index: 20;
+      }
+      #help.hidden { display: none; }
+      #help h3 { margin: 0 0 8px; font-size: 13px; color: #f1c40f; }
+      #help .k { color: #81ecec; font-weight: 700; }
+      #help p { margin: 6px 0; }
     </style>
   </head>
   <body>
     <div id="app"></div>
-    <div id="hud">
-      <h1>Station Manager</h1>
-      <div class="row"><span>Score</span><span id="score">0</span></div>
-      <div class="row"><span>Served</span><span id="served">0</span></div>
-      <div class="row"><span>Waiting</span><span id="waiting">0</span></div>
-      <div class="row"><span>On site</span><span id="trains">0</span></div>
-      <div class="row"><span>Crashes</span><span id="crashes">0</span></div>
-      <div class="row"><span>Time</span><span id="time">0s</span></div>
+
+    <div id="topbar">
+      <div id="brand">STATION MANAGER<small>CENTRAL · LIVE CONTROL</small></div>
+      <div class="stats">
+        <div class="stat good"><span class="label">SCORE</span><b id="score">0</b></div>
+        <div class="stat"><span class="label">SERVED</span><b id="served">0</b></div>
+        <div class="stat"><span class="label">WAITING</span><b id="waiting">0</b></div>
+        <div class="stat"><span class="label">TRACKS</span><b id="trains">0</b></div>
+        <div class="stat warn"><span class="label">CRASHES</span><b id="crashes">0</b></div>
+        <div class="stat"><span class="label">TIME</span><b id="time">0s</b></div>
+      </div>
+      <button class="icon-btn" id="help-btn" title="How to play">?</button>
     </div>
-    <div id="objective">
-      <b>Your job:</b> use the signals to route trains.<br>
-      1. Trains wait in the blue bays at each end.<br>
-      2. Open the <b>W</b> (left) or <b>E</b> (right) main signal for that side.<br>
-      3. Open that platform's signal on the same side (<b>P1L…P4L</b> left end or
-         <b>P1R…P4R</b> right end) — the train automatically routes to that free
-         platform. Entry, exit and main signals all turn <b>red</b> once it enters.<br>
-      4. When it says <b>READY</b>, open the platform signal on the side it will
-         leave — the train departs automatically and that side's main signal turns red.<br>
-      5. <b>EXPRESS</b> and <b>GOODS</b> trains skip the platforms: just open the main
-         <b>W/E</b> signal and they use the green bypass line straight through (big bonus).<br>
-      6. Serve trains, avoid 5 crashes. <span class="k">SPACE</span> pause &middot; <span class="k">R</span> restart.
+
+    <div id="statusbar"><span id="status-msg">Open a main signal to start the shift</span></div>
+
+    <div id="help" class="hidden">
+      <h3>How to play</h3>
+      <p><b>Local</b> trains need two green lights: the main <span class="k">W</span>/<span class="k">E</span> and their platform signal. They dock, then you open the platform's <span class="k">other-end</span> signal to send them out.</p>
+      <p><b>Express</b> &amp; <b>Goods</b> skip platforms — just the main signal and they use the green bypass. Big bonus.</p>
+      <p>Each light turns red automatically once a train claims it. Only one train uses a throat at a time.</p>
+      <p><span class="k">SPACE</span> pause · <span class="k">R</span> restart</p>
     </div>
-    <div id="hint">
-      Signals are the round lights above the track. Green = proceed, Red = stop.
-      Only one train may use a station throat at a time — others wait in their bay until it clears.
-    </div>
+
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

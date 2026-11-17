@@ -650,8 +650,17 @@ export class GameScene extends Phaser.Scene {
     set('score', `${this.score}`);
     set('served', `${this.served}`);
     set('crashes', `${this.crashes}`);
-    set('time', `${Math.floor(this.elapsed)}`);
+    set('time', `${Math.floor(this.elapsed)}s`);
     set('trains', `${this.trains.length}`);
-    set('waiting', `${this.trains.filter(t => t.state === 'waiting').length}`);
+    const waiting = this.trains.filter(t => t.state === 'waiting').length;
+    set('waiting', `${waiting}`);
+    const ready = this.trains.find(t => t.state === 'docked' && t.dwellTimer <= 0);
+    const msg = ready
+      ? `<b>${ready.id}</b> READY — open platform ${(ready.platform ?? 0) + 1} ${ready.direction === 'west' ? 'RIGHT' : 'LEFT'} signal`
+      : waiting
+      ? `<b>${waiting}</b> train(s) waiting — open main W/E + a platform signal`
+      : 'Express &amp; goods use the bypass — open the main signal';
+    const status = document.getElementById('status-msg');
+    if (status) status.innerHTML = msg;
   }
 }
