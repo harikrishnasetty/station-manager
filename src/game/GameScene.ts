@@ -3,7 +3,7 @@ import type { Car, Route, Train, TrainState } from './types';
 import {
   buildNetwork, pointAt, angleAt, W, H,
   PLATFORM_Y, PLATFORM_X0, PLATFORM_X1, MAIN_Y, MAIN_IN_Y,
-  JUNC_W, JUNC_E, HOLD_PROGRESS,
+  HOLD_PROGRESS,
 } from './network';
 
 interface TrainView {
@@ -461,7 +461,7 @@ export class GameScene extends Phaser.Scene {
     let total = 0;
     for (let i = 1; i < pts.length; i++) total += Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
     const samples: Phaser.Math.Vector2[] = [];
-    for (let d = 0; d <= total; d += 6) {
+    for (let d = 0; d <= total; d += 4) {
       const p = pointAt(pts, d);
       const a = angleAt(pts, Math.min(total - 0.01, Math.max(0.01, d)));
       samples.push(new Phaser.Math.Vector2(p.x - Math.sin(a) * offset, p.y + Math.cos(a) * offset));
@@ -597,8 +597,8 @@ export class GameScene extends Phaser.Scene {
     g.fillStyle(0x81ecec, 0.7); g.fillRect(629, 629, 9, 12); g.fillRect(642, 629, 9, 12);
     g.fillStyle(0xf1c40f, 1); g.fillRect(636, 618, 8, 3);
 
-    // Junction markers
-    for (const jx of [JUNC_W, JUNC_E]) {
+    // Turnout throat markers at the start of each fan.
+    for (const jx of [40, W - 40]) {
       g.fillStyle(0xf1c40f, 0.8);
       g.fillTriangle(jx - 9, MAIN_Y + 9, jx + 9, MAIN_Y + 9, jx, MAIN_Y - 9);
     }
